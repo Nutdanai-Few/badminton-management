@@ -1,12 +1,19 @@
-// ===== Storage Keys =====
-const STORAGE_KEYS = {
-    players: 'bmPlayers',
-    settings: 'bmSettings',
-    matches: 'bmMatches',
-    scores: 'bmScores',
-    history: 'bmHistory'
+// ===== Firebase Config =====
+const firebaseConfig = {
+    apiKey: "AIzaSyAMXHDU0ESCGzkMS2ijqAFQwMAagAhkj8s",
+    authDomain: "badminton-management-c917a.firebaseapp.com",
+    databaseURL: "https://badminton-management-c917a-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "badminton-management-c917a",
+    storageBucket: "badminton-management-c917a.firebasestorage.app",
+    messagingSenderId: "330964219244",
+    appId: "1:330964219244:web:7808a79ec41425476d6f49"
 };
 
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+const dbRef = db.ref('badminton');
+
+// ===== State =====
 let state = {
     players: [],
     settings: { mode: 'singles', courts: 1 },
@@ -15,43 +22,38 @@ let state = {
     history: {}
 };
 
-// ===== State Persistence =====
+// ===== Firebase Real-time Sync =====
+let isSyncing = false;   // prevent save loop when receiving remote updates
+let saveTimer = null;
+
 function saveState() {
-    localStorage.setItem(STORAGE_KEYS.players, JSON.stringify(state.players));
-    localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(state.settings));
-    localStorage.setItem(STORAGE_KEYS.matches, JSON.stringify(state.matches));
-    localStorage.setItem(STORAGE_KEYS.scores, JSON.stringify(state.scores));
-    localStorage.setItem(STORAGE_KEYS.history, JSON.stringify(state.history));
+    if (isSyncing) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+        dbRef.set({
+            players: state.players,
+            settings: state.settings,
+            matches: state.matches,
+            scores: state.scores,
+            history: state.history
+        });
+    }, 300);
 }
 
-function loadState() {
-    const p = localStorage.getItem(STORAGE_KEYS.players);
-    if (p) state.players = JSON.parse(p);
-    const s = localStorage.getItem(STORAGE_KEYS.settings);
-    if (s) state.settings = JSON.parse(s);
-    const m = localStorage.getItem(STORAGE_KEYS.matches);
-    if (m) state.matches = JSON.parse(m);
-    const sc = localStorage.getItem(STORAGE_KEYS.scores);
-    if (sc) {
-        state.scores = JSON.parse(sc);
-        // Migrate old format: number → {played, wins, losses}
-        for (const key in state.scores) {
-            if (typeof state.scores[key] === 'number') {
-                state.scores[key] = { played: state.scores[key], wins: state.scores[key], losses: 0 };
-            }
-        }
+// Real-time listener — fires on initial load + every remote change
+dbRef.on('value', (snapshot) => {
+    isSyncing = true;
+    const data = snapshot.val();
+    if (data) {
+        state.players = data.players || [];
+        state.settings = data.settings || { mode: 'singles', courts: 1 };
+        state.matches = data.matches || [];
+        state.scores = data.scores || {};
+        state.history = data.history || {};
     }
-    const h = localStorage.getItem(STORAGE_KEYS.history);
-    if (h) state.history = JSON.parse(h);
-}
-
-function syncFromStorage(e) {
-    if (!e.key) return;
-    loadState();
     renderAll();
-}
-
-window.addEventListener('storage', syncFromStorage);
+    isSyncing = false;
+});
 
 // ===== SVG Icons =====
 const ICONS = {
@@ -849,9 +851,9 @@ document.getElementById('qr-copy-btn').addEventListener('click', () => {
 });
 
 // ===== Initial Load =====
-loadState();
-renderAll();
+// Firebase onValue listener (above) handles initial data load + real-time sync
+// renderAll() is called automatically when data arrives
 
-// Restore saved tab
+// Restore saved tab (UI-only preference, stays in localStorage)
 const savedTab = localStorage.getItem('bmActiveTab');
 if (savedTab) switchTab(savedTab);
