@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Badminton Scheduler</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <!-- Header -->
+    <header class="app-header">
+        <div class="header-inner">
+            <svg class="header-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M12 9V2M12 15v7M9 12H2M15 12h7" stroke-linecap="round" />
+            </svg>
+            <h1 class="header-title">Badminton Scheduler</h1>
+            <button class="btn-qr" id="qr-btn" aria-label="แชร์ QR Code">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+                    <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="17" y="17" width="4" height="4" rx="0.5"/>
+                    <path d="M14 14h3v3M14 20h0.01M20 14h0.01"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Tab Navigation -->
+        <nav class="tab-bar">
+            <button class="tab-btn active" data-tab="settings">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v6M23 11h-6"/>
+                </svg>
+                <span>ตั้งค่า</span>
+            </button>
+            <button class="tab-btn" data-tab="schedule">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><path d="M16 2v4M8 2v4M3 10h18"/>
+                </svg>
+                <span>ตารางแข่งขัน</span>
+                <span class="tab-badge" id="tab-match-badge" style="display:none;">0</span>
+            </button>
+            <button class="tab-btn" data-tab="scoreboard">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 20V10M18 20V4M6 20v-4"/>
+                </svg>
+                <span>ตารางคะแนน</span>
+            </button>
+        </nav>
+    </header>
+
+    <!-- Pages -->
+    <main class="page-container">
+
+        <!-- Page 1: Settings -->
+        <div class="page active" id="page-settings">
+            <div class="page-inner page-inner--narrow">
+                <!-- Players Section -->
+                <section class="card" id="players-section">
+                    <div class="section-header">
+                        <span class="section-label">ผู้แข่งขัน</span>
+                        <div class="section-header-right">
+                            <span class="section-badge" id="player-count-badge">0 คน</span>
+                            <button class="btn-clear" id="clear-players-btn" style="display:none;">ล้างรายชื่อ</button>
+                        </div>
+                    </div>
+                    <form id="add-player-form" class="player-input-row">
+                        <input class="player-input" type="text" id="player-name"
+                               placeholder="พิมพ์ชื่อผู้เล่น หรือทีม" required />
+                        <button class="btn-add" type="submit">+ เพิ่ม</button>
+                    </form>
+                    <div id="players-list" class="player-chips"></div>
+                </section>
+
+                <!-- Settings Section -->
+                <section class="card" id="settings-section">
+                    <div class="section-header">
+                        <span class="section-label">ตั้งค่าการแข่งขัน</span>
+                    </div>
+
+                    <div class="setting-row">
+                        <span class="setting-label">โหมด</span>
+                        <div class="segmented-control" id="mode-toggle">
+                            <input type="radio" name="mode" id="mode-singles" value="singles" checked />
+                            <label for="mode-singles" class="segment-label">เดี่ยว</label>
+                            <input type="radio" name="mode" id="mode-doubles" value="doubles" />
+                            <label for="mode-doubles" class="segment-label">คู่</label>
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <span class="setting-label">จำนวนสนาม</span>
+                        <div class="stepper" id="courts-stepper">
+                            <button type="button" class="stepper-btn" id="courts-dec">−</button>
+                            <span class="stepper-value" id="courts-value">1</span>
+                            <button type="button" class="stepper-btn" id="courts-inc">+</button>
+                        </div>
+                    </div>
+
+                    <button id="generate-btn" class="btn-generate" disabled>
+                        เพิ่มผู้เล่นอย่างน้อย 2 คน
+                    </button>
+                </section>
+
+                <!-- Clear All -->
+                <button class="btn-clear-all" id="clear-all-btn">ล้างข้อมูลทั้งหมด</button>
+            </div>
+        </div>
+
+        <!-- Page 2: Schedule -->
+        <div class="page" id="page-schedule">
+            <div class="page-inner">
+                <section class="card" id="schedule-section">
+                    <div class="section-header">
+                        <span class="section-label">ตารางการแข่งขัน</span>
+                        <div class="section-header-right">
+                            <span class="section-badge" id="match-count-badge" style="display:none;">0 คู่</span>
+                            <button class="btn-clear" id="clear-schedule-btn" style="display:none;">ล้างตาราง</button>
+                        </div>
+                    </div>
+                    <div id="matches-container"></div>
+                </section>
+            </div>
+        </div>
+
+        <!-- Page 3: Scoreboard -->
+        <div class="page" id="page-scoreboard">
+            <div class="page-inner">
+                <!-- Scoreboard Section -->
+                <section class="card" id="scoreboard-section">
+                    <div class="section-header">
+                        <span class="section-label">ตารางคะแนนสะสม</span>
+                        <button class="btn-clear" id="clear-scores-btn" style="display:none;">ล้างคะแนน</button>
+                    </div>
+                    <div id="scoreboard-list" class="scoreboard-list"></div>
+                </section>
+
+                <!-- History Section -->
+                <section class="card" id="history-section">
+                    <div class="section-header">
+                        <span class="section-label">ประวัติอันดับรายวัน</span>
+                        <button class="btn-clear" id="clear-history-btn" style="display:none;">ล้างประวัติ</button>
+                    </div>
+                    <ul id="history-list" class="history-list"></ul>
+                </section>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- QR Code Modal -->
+    <div class="qr-overlay" id="qr-overlay">
+        <div class="qr-modal">
+            <div class="qr-modal-header">
+                <span class="qr-modal-title">แชร์ลิงก์</span>
+                <button class="qr-close-btn" id="qr-close-btn" aria-label="ปิด">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="qr-body">
+                <div class="qr-code" id="qr-code"></div>
+                <p class="qr-hint">สแกน QR Code เพื่อเปิดหน้านี้</p>
+                <div class="qr-url-row">
+                    <input class="qr-url-input" id="qr-url-input" type="text" readonly />
+                    <button class="qr-copy-btn" id="qr-copy-btn">คัดลอก</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+        <div class="footer-inner">
+            Badminton Scheduler &copy; 2026
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
