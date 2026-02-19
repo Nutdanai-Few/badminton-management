@@ -850,7 +850,42 @@ document.getElementById('qr-copy-btn').addEventListener('click', () => {
     });
 });
 
+// ===== Theme Toggle =====
+let currentThemeMode = 'system';
+
+function applyTheme(mode) {
+    currentThemeMode = mode;
+    localStorage.setItem('bmTheme', mode);
+
+    if (mode === 'system') {
+        const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    } else {
+        document.documentElement.setAttribute('data-theme', mode);
+    }
+
+    // Update active button
+    document.querySelectorAll('.theme-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.theme === mode);
+    });
+}
+
+// Theme toggle click handlers
+document.getElementById('theme-toggle').addEventListener('click', e => {
+    const btn = e.target.closest('.theme-btn');
+    if (!btn) return;
+    applyTheme(btn.dataset.theme);
+});
+
+// Listen for OS theme changes (for system mode)
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (currentThemeMode === 'system') applyTheme('system');
+});
+
 // ===== Initial Load =====
+// Apply saved theme (before content renders to avoid flash)
+applyTheme(localStorage.getItem('bmTheme') || 'system');
+
 // Firebase onValue listener (above) handles initial data load + real-time sync
 // renderAll() is called automatically when data arrives
 

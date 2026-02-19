@@ -20,6 +20,46 @@
   --color-rank-1: #F59E0B;
   --color-rank-2: #94A3B8;
   --color-rank-3: #CD7F32;
+
+  --color-shadow: rgba(0, 0, 0, 0.04);
+  --color-overlay: rgba(0, 0, 0, 0.5);
+  --color-modal-shadow: rgba(0, 0, 0, 0.15);
+  --color-segment-shadow: rgba(0, 0, 0, 0.1);
+  --color-saved-border: #D1FAE5;
+  --color-empty-icon: #D1D5DB;
+  --color-copy-done: #16a34a;
+}
+
+/* ===== Dark Theme ===== */
+[data-theme="dark"] {
+  --color-bg: #111827;
+  --color-surface: #1F2937;
+  --color-border: #374151;
+  --color-border-strong: #4B5563;
+
+  --color-text-primary: #F9FAFB;
+  --color-text-secondary: #9CA3AF;
+  --color-text-muted: #6B7280;
+
+  --color-accent: #34D399;
+  --color-accent-light: #064E3B;
+  --color-accent-hover: #6EE7B7;
+
+  --color-danger: #F87171;
+  --color-danger-light: #7F1D1D;
+
+  --color-winner-bg: #064E3B;
+  --color-rank-1: #FBBF24;
+  --color-rank-2: #94A3B8;
+  --color-rank-3: #CD7F32;
+
+  --color-shadow: rgba(0, 0, 0, 0.2);
+  --color-overlay: rgba(0, 0, 0, 0.7);
+  --color-modal-shadow: rgba(0, 0, 0, 0.4);
+  --color-segment-shadow: rgba(0, 0, 0, 0.3);
+  --color-saved-border: #065F46;
+  --color-empty-icon: #4B5563;
+  --color-copy-done: #22c55e;
 }
 
 /* ===== Global Resets ===== */
@@ -175,7 +215,6 @@ input[type=number] {
 
 /* ===== QR Share Button ===== */
 .btn-qr {
-  margin-left: auto;
   width: 36px;
   height: 36px;
   display: flex;
@@ -206,7 +245,7 @@ input[type=number] {
   position: fixed;
   inset: 0;
   z-index: 200;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--color-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -227,7 +266,7 @@ input[type=number] {
   border-radius: 20px;
   width: 340px;
   max-width: calc(100vw - 32px);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 20px 60px var(--color-modal-shadow);
   transform: scale(0.95) translateY(8px);
   transition: transform 0.25s ease;
   overflow: hidden;
@@ -285,7 +324,7 @@ input[type=number] {
 
 .qr-code {
   padding: 16px;
-  background: white;
+  background: var(--color-surface);
   border-radius: 12px;
   border: 1px solid var(--color-border);
   line-height: 0;
@@ -340,11 +379,54 @@ input[type=number] {
 }
 
 .qr-copy-btn--done {
-  background: #16a34a;
+  background: var(--color-copy-done);
 }
 
 .qr-copy-btn--done:hover {
-  background: #16a34a;
+  background: var(--color-copy-done);
+}
+
+/* ===== Theme Toggle ===== */
+.theme-toggle {
+  display: flex;
+  margin-left: auto;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 2px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.theme-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.theme-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.theme-btn:hover {
+  color: var(--color-text-secondary);
+  background: var(--color-border);
+}
+
+.theme-btn.active {
+  background: var(--color-accent);
+  color: white;
+  box-shadow: 0 1px 3px var(--color-segment-shadow);
 }
 
 /* ===== Footer ===== */
@@ -372,7 +454,7 @@ input[type=number] {
 }
 
 .card:hover {
-  box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+  box-shadow: 0 2px 12px var(--color-shadow);
 }
 
 /* ===== Section Header ===== */
@@ -580,7 +662,7 @@ input[type=number] {
 .segmented-control input[type="radio"]:checked + .segment-label {
   background: var(--color-accent);
   color: white;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  box-shadow: 0 1px 3px var(--color-segment-shadow);
 }
 
 /* ===== Stepper ===== */
@@ -744,7 +826,7 @@ input[type=number] {
 
 .match-row--saved td {
   background: var(--color-winner-bg);
-  border-color: #D1FAE5;
+  border-color: var(--color-saved-border);
 }
 
 .match-row--flash td {
@@ -1084,7 +1166,7 @@ input[type=number] {
 }
 
 .empty-icon {
-  color: #D1D5DB;
+  color: var(--color-empty-icon);
   margin-bottom: 4px;
 }
 
@@ -1168,7 +1250,7 @@ input[type=number] {
 
   .match-row--saved {
     background: var(--color-winner-bg);
-    border-color: #D1FAE5;
+    border-color: var(--color-saved-border);
   }
 
   .match-row--flash {
