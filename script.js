@@ -399,7 +399,10 @@ function renderMatches() {
         roundMatches.forEach(m => m.teams.forEach(t => inRound.add(t)));
         const sittingOut = [...allTeams].filter(p => !inRound.has(p));
         if (sittingOut.length > 0) {
-            headerHTML += `<span class="round-rest">${sittingOut.join(', ')} พัก</span>`;
+            headerHTML += `<div class="round-rest-group">
+                <span class="round-rest-label">พัก</span>
+                ${sittingOut.map(name => `<span class="round-rest-name">${name}</span>`).join('')}
+            </div>`;
         }
 
         header.innerHTML = headerHTML;

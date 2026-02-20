@@ -752,8 +752,10 @@ input[type=number] {
 
 .round-header {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 8px 16px;
   margin-bottom: 4px;
 }
@@ -762,16 +764,35 @@ input[type=number] {
   font-size: 13px;
   font-weight: 600;
   color: var(--color-text-primary);
+  white-space: nowrap;
 }
 
-.round-rest {
-  font-size: 12px;
-  font-weight: 500;
+.round-rest-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.round-rest-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: var(--color-text-muted);
+  opacity: 0.7;
+  margin-right: 2px;
+}
+
+.round-rest-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
   background: var(--color-bg);
-  padding: 2px 10px;
-  border-radius: 999px;
+  padding: 2px 8px;
+  border-radius: 6px;
   border: 1px solid var(--color-border);
+  white-space: nowrap;
 }
 
 /* ===== Match Table ===== */
