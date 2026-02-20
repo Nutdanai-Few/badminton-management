@@ -371,8 +371,10 @@ function renderMatches() {
     });
 
     const roundNumbers = Object.keys(rounds).map(Number).sort((a, b) => a - b);
-    const participants = getParticipants();
-    const isOddParticipants = participants.length % 2 === 1;
+
+    // Collect all unique teams from the actual matches (handles re-paired doubles)
+    const allTeams = new Set();
+    state.matches.forEach(m => m.teams.forEach(t => allTeams.add(t)));
 
     badge.style.display = '';
     badge.textContent = `${state.matches.length} คู่ · ${roundNumbers.length} รอบ`;
@@ -392,14 +394,12 @@ function renderMatches() {
 
         let headerHTML = `<span class="round-label">รอบที่ ${roundNum}</span>`;
 
-        // Find who sits out (if odd number of participants)
-        if (isOddParticipants) {
-            const inRound = new Set();
-            roundMatches.forEach(m => m.teams.forEach(t => inRound.add(t)));
-            const sittingOut = participants.filter(p => !inRound.has(p));
-            if (sittingOut.length > 0) {
-                headerHTML += `<span class="round-rest">${sittingOut.join(', ')} พัก</span>`;
-            }
+        // Find who sits out this round (due to BYE or courts constraint)
+        const inRound = new Set();
+        roundMatches.forEach(m => m.teams.forEach(t => inRound.add(t)));
+        const sittingOut = [...allTeams].filter(p => !inRound.has(p));
+        if (sittingOut.length > 0) {
+            headerHTML += `<span class="round-rest">${sittingOut.join(', ')} พัก</span>`;
         }
 
         header.innerHTML = headerHTML;
@@ -507,20 +507,24 @@ document.getElementById('matches-container').addEventListener('click', e => {
 // Singles: each player is a participant
 // Doubles: pair players sequentially into teams (player[0]+[1], [2]+[3], ...)
 //   If odd number: last 3 players form a triple team that rotates lineup
+function getParticipantsFromList(playerList) {
+    const teams = [];
+    const n = playerList.length;
+    const hasTriple = n >= 3 && n % 2 === 1;
+    const pairEnd = hasTriple ? n - 3 : n;
+
+    for (let i = 0; i < pairEnd; i += 2) {
+        teams.push(playerList[i] + ' / ' + playerList[i + 1]);
+    }
+    if (hasTriple) {
+        teams.push(playerList[n - 3] + ' / ' + playerList[n - 2] + ' / ' + playerList[n - 1]);
+    }
+    return teams;
+}
+
 function getParticipants() {
     if (state.settings.mode === 'doubles') {
-        const teams = [];
-        const n = state.players.length;
-        const hasTriple = n >= 3 && n % 2 === 1;
-        const pairEnd = hasTriple ? n - 3 : n;
-
-        for (let i = 0; i < pairEnd; i += 2) {
-            teams.push(state.players[i] + ' / ' + state.players[i + 1]);
-        }
-        if (hasTriple) {
-            teams.push(state.players[n - 3] + ' / ' + state.players[n - 2] + ' / ' + state.players[n - 1]);
-        }
-        return teams;
+        return getParticipantsFromList(state.players);
     }
     return [...state.players];
 }
@@ -636,8 +640,27 @@ function roundRobin(participants) {
 }
 
 function makeSchedule() {
-    const participants = shuffle(getParticipants());
-    const matches = roundRobin(participants);
+    // Shuffle players BEFORE forming pairs so doubles re-pairing actually happens
+    const shuffledPlayers = shuffle(state.players);
+    const participants = state.settings.mode === 'doubles'
+        ? getParticipantsFromList(shuffledPlayers)
+        : [...shuffledPlayers];
+    const shuffledParticipants = shuffle(participants);
+    const matches = roundRobin(shuffledParticipants);
+
+    // Apply courts constraint: limit matches per round to the number of courts
+    const maxCourts = state.settings.courts;
+    const redistributed = [];
+    let currentRound = 1;
+    let countInRound = 0;
+    matches.forEach(m => {
+        if (countInRound >= maxCourts) {
+            currentRound++;
+            countInRound = 0;
+        }
+        redistributed.push({ ...m, round: currentRound });
+        countInRound++;
+    });
 
     // For doubles with a 3-player team, assign rotating lineups
     if (state.settings.mode === 'doubles') {
@@ -645,7 +668,7 @@ function makeSchedule() {
         if (tripleTeam) {
             const combos = getTripleCombos(tripleTeam);
             let comboIdx = 0;
-            matches.forEach(m => {
+            redistributed.forEach(m => {
                 const teamIdx = m.teams.indexOf(tripleTeam);
                 if (teamIdx !== -1) {
                     const combo = combos[comboIdx % combos.length];
@@ -658,7 +681,7 @@ function makeSchedule() {
         }
     }
 
-    return matches;
+    return redistributed;
 }
 
 // ===== Tab Navigation =====
