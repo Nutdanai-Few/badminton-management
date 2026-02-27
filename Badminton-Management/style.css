@@ -490,6 +490,65 @@ input[type=number] {
   border-radius: 999px;
 }
 
+/* ===== Reshuffle Button ===== */
+.btn-reshuffle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-accent);
+  border-radius: 999px;
+  padding: 2px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-reshuffle:hover {
+  background: var(--color-accent);
+  color: white;
+}
+
+/* ===== Schedule Complete Banner ===== */
+.schedule-complete-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 20px;
+  margin-bottom: 16px;
+  background: var(--color-accent-light);
+  border: 1px solid var(--color-accent);
+  border-radius: 12px;
+  animation: fadeIn 300ms ease both;
+}
+
+.schedule-complete-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.complete-icon {
+  width: 28px;
+  height: 28px;
+  color: var(--color-accent);
+  flex-shrink: 0;
+}
+
+.schedule-complete-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-accent);
+  margin: 0;
+}
+
+.schedule-complete-hint {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin: 0;
+  margin-top: 2px;
+}
+
 /* ===== Clear Buttons ===== */
 .btn-clear {
   font-size: 12px;
@@ -752,8 +811,10 @@ input[type=number] {
 
 .round-header {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 8px 16px;
   margin-bottom: 4px;
 }
@@ -762,16 +823,35 @@ input[type=number] {
   font-size: 13px;
   font-weight: 600;
   color: var(--color-text-primary);
+  white-space: nowrap;
 }
 
-.round-rest {
-  font-size: 12px;
-  font-weight: 500;
+.round-rest-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.round-rest-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: var(--color-text-muted);
+  opacity: 0.7;
+  margin-right: 2px;
+}
+
+.round-rest-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
   background: var(--color-bg);
-  padding: 2px 10px;
-  border-radius: 999px;
+  padding: 2px 8px;
+  border-radius: 6px;
   border: 1px solid var(--color-border);
+  white-space: nowrap;
 }
 
 /* ===== Match Table ===== */
@@ -1225,6 +1305,20 @@ input[type=number] {
 
 /* ===== Responsive ===== */
 @media (max-width: 639px) {
+  /* -- Section header: wrap when buttons overflow -- */
+  .section-header {
+    flex-wrap: wrap;
+    gap: 6px 0;
+    padding-bottom: 10px;
+  }
+
+  .section-header-right {
+    width: 100%;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
   /* -- Match table → card layout -- */
   .match-table,
   .match-table tbody {
