@@ -379,6 +379,26 @@ function renderMatches() {
     badge.style.display = '';
     badge.textContent = `${state.matches.length} คู่ · ${roundNumbers.length} รอบ`;
 
+    // Show completion banner when all matches are scored
+    if (isScheduleComplete()) {
+        const banner = document.createElement('div');
+        banner.className = 'schedule-complete-banner';
+        banner.innerHTML = `
+            <div class="schedule-complete-inner">
+                <svg class="complete-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 7H3a2 2 0 000 4c0 2.4 2 4 5 5M19 7h2a2 2 0 010 4c0 2.4-2 4-5 5"/>
+                    <rect x="5" y="3" width="14" height="4" rx="1"/>
+                    <path d="M8 21h8M12 17v4"/>
+                </svg>
+                <div>
+                    <p class="schedule-complete-title">แข่งครบทุกคู่แล้ว!</p>
+                    <p class="schedule-complete-hint">กดปุ่ม "สุ่มคู่ใหม่" เพื่อเริ่มรอบใหม่</p>
+                </div>
+            </div>
+        `;
+        container.appendChild(banner);
+    }
+
     let matchNum = 0;
 
     roundNumbers.forEach((roundNum, ri) => {
@@ -590,6 +610,12 @@ function updateScoresForMatch(match, oldScoreA, oldScoreB, newScoreA, newScoreB)
     }
 }
 
+// ===== Schedule Completion Check =====
+function isScheduleComplete() {
+    return state.matches.length > 0 &&
+        state.matches.every(m => m.scoreA != null && m.scoreB != null);
+}
+
 // ===== Shuffle (Fisher-Yates) =====
 function shuffle(arr) {
     const a = [...arr];
@@ -649,21 +675,48 @@ function makeSchedule() {
         ? getParticipantsFromList(shuffledPlayers)
         : [...shuffledPlayers];
     const shuffledParticipants = shuffle(participants);
-    const matches = roundRobin(shuffledParticipants);
+    const allMatches = roundRobin(shuffledParticipants);
 
-    // Apply courts constraint: limit matches per round to the number of courts
+    // Keep the original round structure; within each round pick at most `courts` matches.
+    // This means: 5 teams + 1 court = 5 rounds × 1 match each (each team plays ~2 times).
+    //             5 teams + 2 courts = 5 rounds × 2 matches each (full round-robin).
     const maxCourts = state.settings.courts;
-    const redistributed = [];
-    let currentRound = 1;
-    let countInRound = 0;
-    matches.forEach(m => {
-        if (countInRound >= maxCourts) {
-            currentRound++;
-            countInRound = 0;
-        }
-        redistributed.push({ ...m, round: currentRound });
-        countInRound++;
+    const roundMap = {};
+    allMatches.forEach(m => {
+        if (!roundMap[m.round]) roundMap[m.round] = [];
+        roundMap[m.round].push(m);
     });
+
+    // Track how many times each team has been assigned a match (for fairness)
+    const playCount = {};
+    shuffledParticipants.forEach(p => { playCount[p] = 0; });
+
+    const selected = [];
+    Object.keys(roundMap)
+        .map(Number)
+        .sort((a, b) => a - b)
+        .forEach((roundNum, idx) => {
+            const inRound = new Set();
+            // Prioritise matches where both teams have played the fewest times.
+            // Random tiebreak keeps variety across reshuffles.
+            const matchesInRound = [...roundMap[roundNum]].sort((a, b) => {
+                const sumA = playCount[a.teams[0]] + playCount[a.teams[1]];
+                const sumB = playCount[b.teams[0]] + playCount[b.teams[1]];
+                return sumA - sumB || Math.random() - 0.5;
+            });
+
+            let taken = 0;
+            for (const m of matchesInRound) {
+                if (taken >= maxCourts) break;
+                if (inRound.has(m.teams[0]) || inRound.has(m.teams[1])) continue;
+                selected.push({ ...m, round: idx + 1 });
+                inRound.add(m.teams[0]);
+                inRound.add(m.teams[1]);
+                playCount[m.teams[0]]++;
+                playCount[m.teams[1]]++;
+                taken++;
+            }
+        });
 
     // For doubles with a 3-player team, assign rotating lineups
     if (state.settings.mode === 'doubles') {
@@ -671,7 +724,7 @@ function makeSchedule() {
         if (tripleTeam) {
             const combos = getTripleCombos(tripleTeam);
             let comboIdx = 0;
-            redistributed.forEach(m => {
+            selected.forEach(m => {
                 const teamIdx = m.teams.indexOf(tripleTeam);
                 if (teamIdx !== -1) {
                     const combo = combos[comboIdx % combos.length];
@@ -684,7 +737,7 @@ function makeSchedule() {
         }
     }
 
-    return redistributed;
+    return selected;
 }
 
 // ===== Tab Navigation =====
@@ -759,6 +812,20 @@ document.getElementById('generate-btn').addEventListener('click', () => {
     switchTab('schedule');
 });
 
+// ===== Event: Reshuffle =====
+document.getElementById('reshuffle-btn').addEventListener('click', () => {
+    const participants = getParticipants();
+    if (participants.length < 2) return;
+    state.matches = makeSchedule();
+    saveState();
+    renderMatches();
+    renderScoreboard();
+    updateGenerateButton();
+    updateTabBadge();
+    updateClearButtons();
+    switchTab('schedule');
+});
+
 // ===== Clear Actions =====
 document.getElementById('clear-players-btn').addEventListener('click', () => {
     if (!confirm('ล้างรายชื่อผู้เล่นทั้งหมด?')) return;
@@ -808,6 +875,8 @@ function updateClearButtons() {
     document.getElementById('clear-players-btn').style.display =
         state.players.length > 0 ? '' : 'none';
     document.getElementById('clear-schedule-btn').style.display =
+        state.matches.length > 0 ? '' : 'none';
+    document.getElementById('reshuffle-btn').style.display =
         state.matches.length > 0 ? '' : 'none';
 
     const hasScores = Object.keys(state.scores).some(k => state.scores[k].played > 0);
