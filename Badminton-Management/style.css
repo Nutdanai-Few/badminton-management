@@ -892,6 +892,7 @@ input[type=number] {
   border-top: 1px solid var(--color-border);
   border-bottom: 1px solid var(--color-border);
   vertical-align: middle;
+  transition: background-color 0.25s ease, border-color 0.25s ease;
 }
 
 .match-row td:first-child {
@@ -909,10 +910,6 @@ input[type=number] {
   border-color: var(--color-saved-border);
 }
 
-.match-row--flash td {
-  animation: flashGreen 600ms linear;
-}
-
 .match-num {
   font-size: 13px;
   font-weight: 600;
@@ -928,6 +925,32 @@ input[type=number] {
 .team-winner {
   font-weight: 700;
   color: var(--color-accent);
+}
+
+.team-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font-size: inherit;
+  font-weight: inherit;
+  font-family: inherit;
+  color: inherit;
+  line-height: 1.5;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.team-btn:hover {
+  background: var(--color-accent-light);
+  border-color: var(--color-accent);
+}
+
+.team-btn--winner {
+  background: var(--color-accent-light);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  font-weight: 700;
 }
 
 .vs-separator {
@@ -1025,58 +1048,60 @@ input[type=number] {
   overflow-x: auto;
 }
 
+/* ===== Scoreboard Table ===== */
 .sb-table {
   width: 100%;
   border-collapse: collapse;
   font-feature-settings: "tnum";
 }
 
+.sb-table thead th,
+.sb-row td {
+  padding: 12px 14px;
+  vertical-align: middle;
+}
+
 .sb-table thead th {
   font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.07em;
   color: var(--color-text-muted);
   font-weight: 600;
-  padding: 0 12px 10px;
+  padding-top: 0;
+  padding-bottom: 12px;
   border-bottom: 2px solid var(--color-border);
   white-space: nowrap;
 }
 
-.sb-th-rank { text-align: center; width: 48px; }
+.sb-th-rank { text-align: center; width: 52px; }
 .sb-th-name { text-align: left; }
-.sb-th-num  { text-align: center; width: 56px; }
-.sb-th-bar  { text-align: left; min-width: 100px; }
+.sb-th-num  { text-align: center; width: 60px; }
+.sb-th-bar  { text-align: left; min-width: 120px; }
 
 .sb-row {
   animation: slideUp 200ms ease-out both;
 }
 
 .sb-row td {
-  padding: 10px 12px;
   border-bottom: 1px solid var(--color-border);
-  vertical-align: middle;
 }
 
-.sb-row:last-child td {
-  border-bottom: none;
-}
+.sb-row:last-child td { border-bottom: none; }
 
-.sb-row--top td {
-  background: var(--color-accent-light);
-}
+.sb-row--top:nth-child(1) td { background: rgba(245, 158, 11, 0.08); }
+.sb-row--top:nth-child(2) td { background: rgba(148, 163, 184, 0.06); }
+.sb-row--top:nth-child(3) td { background: rgba(205, 127, 50,  0.08); }
 
-.sb-rank {
-  text-align: center;
-}
+.sb-rank { text-align: center; }
 
 .rank-dot {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   color: white;
 }
@@ -1094,25 +1119,22 @@ input[type=number] {
   color: var(--color-text-secondary);
 }
 
-.sb-wins {
-  color: var(--color-accent);
-  font-weight: 700;
-}
-
-.sb-losses {
-  color: var(--color-danger);
-  font-weight: 600;
-}
+.sb-wins   { color: var(--color-accent); font-weight: 700; }
+.sb-losses { color: var(--color-danger); font-weight: 600; }
 
 .sb-bar-cell {
+  /* td stays as table-cell — flex applied to inner div only */
+}
+
+.sb-bar-inner {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .sb-bar-track {
   flex: 1;
-  height: 8px;
+  height: 7px;
   background: var(--color-bg);
   border-radius: 4px;
   overflow: hidden;
@@ -1123,14 +1145,14 @@ input[type=number] {
   height: 100%;
   background: var(--color-accent);
   border-radius: 4px;
-  transition: width 0.4s ease-out;
+  transition: width 0.5s ease-out;
 }
 
 .sb-rate {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 700;
   color: var(--color-text-secondary);
-  min-width: 36px;
+  min-width: 38px;
   text-align: right;
 }
 
@@ -1150,8 +1172,13 @@ input[type=number] {
   overflow: hidden;
 }
 
+.history-entry-header {
+  display: flex;
+  align-items: stretch;
+}
+
 .history-header {
-  width: 100%;
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1163,6 +1190,32 @@ input[type=number] {
   font-weight: 500;
   color: var(--color-text-primary);
   text-align: left;
+  min-width: 0;
+}
+
+.history-delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  flex-shrink: 0;
+  border: none;
+  border-left: 1px solid var(--color-border);
+  background: transparent;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.history-delete-btn:hover {
+  background: var(--color-danger-light);
+  color: var(--color-danger);
+}
+
+.history-delete-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
 .history-header:hover {
@@ -1298,11 +1351,6 @@ input[type=number] {
   to   { opacity: 0; transform: scale(0.9); }
 }
 
-@keyframes flashGreen {
-  0%, 100% { background-color: var(--color-surface); }
-  50%      { background-color: var(--color-winner-bg); }
-}
-
 /* ===== Responsive ===== */
 @media (max-width: 639px) {
   /* -- Section header: wrap when buttons overflow -- */
@@ -1347,20 +1395,12 @@ input[type=number] {
     border-color: var(--color-saved-border);
   }
 
-  .match-row--flash {
-    animation: flashGreen 600ms linear;
-  }
-
   .match-row td {
     display: block;
     border: none !important;
     border-radius: 0 !important;
     padding: 0 !important;
     background: transparent !important;
-  }
-
-  .match-row--flash td {
-    animation: none !important;
   }
 
   /* Line 1: number + teams */
@@ -1418,16 +1458,8 @@ input[type=number] {
   }
 
   /* Scoreboard: hide win-rate bar on mobile */
-  .sb-th-bar,
-  .sb-bar-cell {
-    display: none;
-  }
-
-  .sb-table thead th,
-  .sb-row td {
-    padding: 8px 6px;
-  }
-
+  .sb-th-bar, .sb-bar-cell { display: none; }
+  .sb-table thead th, .sb-row td { padding: 10px 8px; }
   .sb-th-num { width: 44px; }
 
   /* Tab bar: compact text */

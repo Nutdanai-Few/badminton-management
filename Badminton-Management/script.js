@@ -227,7 +227,6 @@ function renderScoreboard() {
         return;
     }
 
-    const maxWins = entries[0][1].wins || 1;
     const rankColors = ['var(--color-rank-1)', 'var(--color-rank-2)', 'var(--color-rank-3)'];
 
     const table = document.createElement('table');
@@ -250,7 +249,7 @@ function renderScoreboard() {
     entries.forEach(([name, stats], i) => {
         const winRate = stats.played > 0
             ? Math.round(stats.wins / stats.played * 100) : 0;
-        const color = rankColors[i] || 'var(--color-border-strong)';
+        const color = rankColors[i] || 'var(--color-text-muted)';
 
         const tr = document.createElement('tr');
         tr.className = 'sb-row' + (i < 3 ? ' sb-row--top' : '');
@@ -262,10 +261,12 @@ function renderScoreboard() {
             <td class="sb-num sb-wins">${stats.wins}</td>
             <td class="sb-num sb-losses">${stats.losses}</td>
             <td class="sb-bar-cell">
-                <div class="sb-bar-track">
-                    <div class="sb-bar-fill" style="width:${winRate}%"></div>
+                <div class="sb-bar-inner">
+                    <div class="sb-bar-track">
+                        <div class="sb-bar-fill" style="width:${winRate}%"></div>
+                    </div>
+                    <span class="sb-rate">${winRate}%</span>
                 </div>
-                <span class="sb-rate">${winRate}%</span>
             </td>
         `;
         tbody.appendChild(tr);
@@ -310,12 +311,15 @@ function renderHistory() {
             })
             .sort((a, b) => b[1].wins - a[1].wins || a[1].losses - b[1].losses);
         const li = document.createElement('li');
-        li.className = 'history-entry' + (i === 0 ? ' open' : '');
+        li.className = 'history-entry';
         li.innerHTML = `
-            <button class="history-header" type="button">
-                <span>${formatThaiDate(date)}</span>
-                <span class="chevron">${ICONS.chevronDown}</span>
-            </button>
+            <div class="history-entry-header">
+                <button class="history-header" type="button">
+                    <span>${formatThaiDate(date)}</span>
+                    <span class="chevron">${ICONS.chevronDown}</span>
+                </button>
+                <button class="history-delete-btn" type="button" data-date="${date}" title="ลบประวัติวันนี้">${ICONS.x}</button>
+            </div>
             <div class="history-body">
                 <div class="history-body-inner">
                     ${ranked.map(([n, s], j) => `
@@ -332,8 +336,18 @@ function renderHistory() {
     });
 }
 
-// Event delegation for history accordion
+// Event delegation for history accordion and per-day delete
 document.getElementById('history-list').addEventListener('click', e => {
+    const deleteBtn = e.target.closest('.history-delete-btn');
+    if (deleteBtn) {
+        const date = deleteBtn.dataset.date;
+        if (!confirm(`ลบประวัติวันที่ ${formatThaiDate(date)}?`)) return;
+        delete state.history[date];
+        saveState();
+        renderHistory();
+        updateClearButtons();
+        return;
+    }
     const header = e.target.closest('.history-header');
     if (!header) return;
     header.closest('.history-entry').classList.toggle('open');
@@ -372,7 +386,7 @@ function renderMatches() {
 
     const roundNumbers = Object.keys(rounds).map(Number).sort((a, b) => a - b);
 
-    // Collect all unique teams from the actual matches (handles re-paired doubles)
+    // Collect all unique teams from the actual matches (used for singles sitting-out)
     const allTeams = new Set();
     state.matches.forEach(m => m.teams.forEach(t => allTeams.add(t)));
 
@@ -401,7 +415,7 @@ function renderMatches() {
 
     let matchNum = 0;
 
-    roundNumbers.forEach((roundNum, ri) => {
+    roundNumbers.forEach((roundNum) => {
         const roundMatches = rounds[roundNum];
 
         // Round container
@@ -415,9 +429,20 @@ function renderMatches() {
         let headerHTML = `<span class="round-label">รอบที่ ${roundNum}</span>`;
 
         // Find who sits out this round (due to BYE or courts constraint)
-        const inRound = new Set();
-        roundMatches.forEach(m => m.teams.forEach(t => inRound.add(t)));
-        const sittingOut = [...allTeams].filter(p => !inRound.has(p));
+        let sittingOut;
+        if (state.settings.mode === 'doubles') {
+            // Doubles: team names change every round, so track individual players
+            const playingInRound = new Set();
+            roundMatches.forEach(m => {
+                getMatchPlayers(m, 0).forEach(p => playingInRound.add(p));
+                getMatchPlayers(m, 1).forEach(p => playingInRound.add(p));
+            });
+            sittingOut = state.players.filter(p => !playingInRound.has(p));
+        } else {
+            const inRound = new Set();
+            roundMatches.forEach(m => m.teams.forEach(t => inRound.add(t)));
+            sittingOut = [...allTeams].filter(p => !inRound.has(p));
+        }
         if (sittingOut.length > 0) {
             headerHTML += `<div class="round-rest-group">
                 <span class="round-rest-label">พัก</span>
@@ -459,9 +484,9 @@ function renderMatches() {
             tr.innerHTML = `
                 <td class="match-num">${matchNum}</td>
                 <td class="match-teams">
-                    <span class="${winnerA ? 'team-winner' : ''}">${teamADisplay}</span>
+                    <button class="team-btn${winnerA ? ' team-btn--winner' : ''}" data-match="${match.idx}" data-winner="A">${teamADisplay}</button>
                     <span class="vs-separator">vs</span>
-                    <span class="${winnerB ? 'team-winner' : ''}">${teamBDisplay}</span>
+                    <button class="team-btn${winnerB ? ' team-btn--winner' : ''}" data-match="${match.idx}" data-winner="B">${teamBDisplay}</button>
                 </td>
                 <td class="score-cell">
                     <input class="score-input${winnerA ? ' score-input--winner' : ''}"
@@ -492,8 +517,89 @@ function renderMatches() {
     });
 }
 
-// Event delegation for match save buttons
+// Update a single match row in-place — no full page re-render, no flicker.
+function updateMatchRowDOM(row, match) {
+    const saved = match.scoreA != null && match.scoreB != null;
+    const winnerA = saved && match.scoreA > match.scoreB;
+    const winnerB = saved && match.scoreB > match.scoreA;
+
+    row.classList.toggle('match-row--saved', saved);
+
+    const [btnA, btnB] = row.querySelectorAll('.team-btn');
+    btnA.classList.toggle('team-btn--winner', winnerA);
+    btnB.classList.toggle('team-btn--winner', winnerB);
+
+    const inputA = row.querySelector('[data-side="A"]');
+    const inputB = row.querySelector('[data-side="B"]');
+    inputA.classList.toggle('score-input--winner', winnerA);
+    inputB.classList.toggle('score-input--winner', winnerB);
+    inputA.value = match.scoreA != null ? match.scoreA : '';
+    inputB.value = match.scoreB != null ? match.scoreB : '';
+
+    const saveBtn = row.querySelector('.btn-save');
+    saveBtn.classList.toggle('btn-save--saved', saved);
+    saveBtn.innerHTML = saved ? ICONS.check : 'บันทึก';
+
+    // Show or remove the completion banner without re-rendering all matches
+    const container = document.getElementById('matches-container');
+    const existingBanner = container.querySelector('.schedule-complete-banner');
+    if (isScheduleComplete()) {
+        if (!existingBanner) {
+            const banner = document.createElement('div');
+            banner.className = 'schedule-complete-banner';
+            banner.innerHTML = `
+                <div class="schedule-complete-inner">
+                    <svg class="complete-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 7H3a2 2 0 000 4c0 2.4 2 4 5 5M19 7h2a2 2 0 010 4c0 2.4-2 4-5 5"/>
+                        <rect x="5" y="3" width="14" height="4" rx="1"/>
+                        <path d="M8 21h8M12 17v4"/>
+                    </svg>
+                    <div>
+                        <p class="schedule-complete-title">แข่งครบทุกคู่แล้ว!</p>
+                        <p class="schedule-complete-hint">กดปุ่ม "สุ่มคู่ใหม่" เพื่อเริ่มรอบใหม่</p>
+                    </div>
+                </div>
+            `;
+            container.appendChild(banner);
+        }
+    } else {
+        existingBanner?.remove();
+    }
+}
+
+// Event delegation for match save buttons and quick winner select
 document.getElementById('matches-container').addEventListener('click', e => {
+    // Quick winner select: click on team name to mark as winner (click again to clear)
+    const teamBtn = e.target.closest('.team-btn');
+    if (teamBtn) {
+        const idx = parseInt(teamBtn.dataset.match, 10);
+        const winner = teamBtn.dataset.winner;
+        const match = state.matches[idx];
+
+        const alreadyWinner = winner === 'A'
+            ? (match.scoreA != null && match.scoreA > match.scoreB)
+            : (match.scoreB != null && match.scoreB > match.scoreA);
+
+        const newA = alreadyWinner ? null : (winner === 'A' ? 1 : 0);
+        const newB = alreadyWinner ? null : (winner === 'B' ? 1 : 0);
+
+        updateScoresForMatch(match, match.scoreA, match.scoreB, newA, newB);
+        match.scoreA = newA;
+        match.scoreB = newB;
+        saveState();
+
+        const row = teamBtn.closest('tr');
+        updateMatchRowDOM(row, match);
+
+        // Defer heavy DOM work so the browser paints the row update first
+        requestAnimationFrame(() => {
+            renderScoreboard();
+            saveHistorySnapshot();
+            updateClearButtons();
+        });
+        return;
+    }
+
     const btn = e.target.closest('.btn-save');
     if (!btn) return;
 
@@ -506,23 +612,19 @@ document.getElementById('matches-container').addEventListener('click', e => {
 
     if (!isNaN(a) && !isNaN(b)) {
         const match = state.matches[idx];
-        // Update individual cumulative scores (undo old, apply new)
         updateScoresForMatch(match, match.scoreA, match.scoreB, a, b);
         match.scoreA = a;
         match.scoreB = b;
         saveState();
 
-        // Flash animation
-        row.classList.add('match-row--flash');
-        setTimeout(() => row.classList.remove('match-row--flash'), 600);
+        updateMatchRowDOM(row, match);
 
-        // Re-render after flash starts
-        setTimeout(() => {
-            renderMatches();
+        // Defer heavy DOM work so the browser paints the row update first
+        requestAnimationFrame(() => {
             renderScoreboard();
             saveHistorySnapshot();
             updateClearButtons();
-        }, 100);
+        });
     }
 });
 
@@ -598,15 +700,17 @@ function updateScoresForMatch(match, oldScoreA, oldScoreB, newScoreA, newScoreB)
         }
     }
 
-    // Apply new result
-    playersA.forEach(p => state.scores[p].played++);
-    playersB.forEach(p => state.scores[p].played++);
-    if (newScoreA > newScoreB) {
-        playersA.forEach(p => state.scores[p].wins++);
-        playersB.forEach(p => state.scores[p].losses++);
-    } else if (newScoreB > newScoreA) {
-        playersB.forEach(p => state.scores[p].wins++);
-        playersA.forEach(p => state.scores[p].losses++);
+    // Apply new result (skip if clearing the score)
+    if (newScoreA != null && newScoreB != null) {
+        playersA.forEach(p => state.scores[p].played++);
+        playersB.forEach(p => state.scores[p].played++);
+        if (newScoreA > newScoreB) {
+            playersA.forEach(p => state.scores[p].wins++);
+            playersB.forEach(p => state.scores[p].losses++);
+        } else if (newScoreB > newScoreA) {
+            playersB.forEach(p => state.scores[p].wins++);
+            playersA.forEach(p => state.scores[p].losses++);
+        }
     }
 }
 
@@ -669,72 +773,103 @@ function roundRobin(participants) {
 }
 
 function makeSchedule() {
-    // Shuffle players BEFORE forming pairs so doubles re-pairing actually happens
-    const shuffledPlayers = shuffle(state.players);
-    const participants = state.settings.mode === 'doubles'
-        ? getParticipantsFromList(shuffledPlayers)
-        : [...shuffledPlayers];
-    const shuffledParticipants = shuffle(participants);
-    const allMatches = roundRobin(shuffledParticipants);
-
-    // Keep the original round structure; within each round pick at most `courts` matches.
-    // This means: 5 teams + 1 court = 5 rounds × 1 match each (each team plays ~2 times).
-    //             5 teams + 2 courts = 5 rounds × 2 matches each (full round-robin).
-    const maxCourts = state.settings.courts;
-    const roundMap = {};
-    allMatches.forEach(m => {
-        if (!roundMap[m.round]) roundMap[m.round] = [];
-        roundMap[m.round].push(m);
+    // Count individual appearances in the CURRENT schedule (before replacing it).
+    // Used as tiebreaker so players who played more previously are deprioritised.
+    const prevPlays = {};
+    state.players.forEach(p => { prevPlays[p] = 0; });
+    state.matches.forEach(m => {
+        getMatchPlayers(m, 0).forEach(p => { if (p in prevPlays) prevPlays[p]++; });
+        getMatchPlayers(m, 1).forEach(p => { if (p in prevPlays) prevPlays[p]++; });
     });
 
-    // Track how many times each team has been assigned a match (for fairness)
+    const maxCourts = state.settings.courts;
+
+    if (state.settings.mode === 'doubles') {
+        // Individual-based pairing: each round, pick the 4×courts players who have
+        // played least and randomly pair them into teams.  No fixed teams or triple
+        // team concept.  Guarantees all players end up with equal play counts.
+        // Example: 9 players, 1 court → 9 rounds, everyone plays exactly 4 times.
+        const playCount = {};
+        state.players.forEach(p => { playCount[p] = 0; });
+        const selected = [];
+
+        for (let r = 1; r <= 1000; r++) {
+            // Shuffle first so equal-count players are picked randomly, then
+            // stable-sort ascending by playCount with prevPlays as tiebreaker.
+            const sorted = shuffle([...state.players])
+                .sort((a, b) => (playCount[a] - playCount[b]) || (prevPlays[a] - prevPlays[b]));
+
+            const usedThisRound = new Set();
+            let taken = 0;
+
+            for (let c = 0; c < maxCourts; c++) {
+                const available = sorted.filter(p => !usedThisRound.has(p));
+                if (available.length < 4) break;
+                const picked = available.slice(0, 4);
+                const s = shuffle(picked);
+                selected.push({
+                    teams: [s[0] + ' / ' + s[1], s[2] + ' / ' + s[3]],
+                    scoreA: null,
+                    scoreB: null,
+                    round: r
+                });
+                picked.forEach(p => { usedThisRound.add(p); playCount[p]++; });
+                taken++;
+            }
+
+            if (taken === 0) break;
+
+            // Stop when every player has played the same number of times (>=1)
+            const counts = state.players.map(p => playCount[p]);
+            if (Math.min(...counts) >= 1 && Math.min(...counts) === Math.max(...counts)) break;
+        }
+
+        return selected;
+    }
+
+    // Singles mode: greedy round-robin pool scheduling
+    const shuffledParticipants = shuffle([...state.players]);
+    const allMatches = roundRobin(shuffledParticipants);
+
     const playCount = {};
     shuffledParticipants.forEach(p => { playCount[p] = 0; });
 
+    const pool = shuffle(allMatches);
     const selected = [];
-    Object.keys(roundMap)
-        .map(Number)
-        .sort((a, b) => a - b)
-        .forEach((roundNum, idx) => {
-            const inRound = new Set();
-            // Prioritise matches where both teams have played the fewest times.
-            // Random tiebreak keeps variety across reshuffles.
-            const matchesInRound = [...roundMap[roundNum]].sort((a, b) => {
-                const sumA = playCount[a.teams[0]] + playCount[a.teams[1]];
-                const sumB = playCount[b.teams[0]] + playCount[b.teams[1]];
-                return sumA - sumB || Math.random() - 0.5;
-            });
 
-            let taken = 0;
-            for (const m of matchesInRound) {
-                if (taken >= maxCourts) break;
-                if (inRound.has(m.teams[0]) || inRound.has(m.teams[1])) continue;
-                selected.push({ ...m, round: idx + 1 });
-                inRound.add(m.teams[0]);
-                inRound.add(m.teams[1]);
-                playCount[m.teams[0]]++;
-                playCount[m.teams[1]]++;
-                taken++;
-            }
+    for (let r = 1; pool.length > 0; r++) {
+        pool.sort((a, b) => {
+            const minA = Math.min(playCount[a.teams[0]], playCount[a.teams[1]]);
+            const minB = Math.min(playCount[b.teams[0]], playCount[b.teams[1]]);
+            if (minA !== minB) return minA - minB;
+            const sumA = playCount[a.teams[0]] + playCount[a.teams[1]];
+            const sumB = playCount[b.teams[0]] + playCount[b.teams[1]];
+            return sumA - sumB;
         });
 
-    // For doubles with a 3-player team, assign rotating lineups
-    if (state.settings.mode === 'doubles') {
-        const tripleTeam = participants.find(p => p.split(' / ').length === 3);
-        if (tripleTeam) {
-            const combos = getTripleCombos(tripleTeam);
-            let comboIdx = 0;
-            selected.forEach(m => {
-                const teamIdx = m.teams.indexOf(tripleTeam);
-                if (teamIdx !== -1) {
-                    const combo = combos[comboIdx % combos.length];
-                    m.tripleLineup = combo.playing;
-                    m.tripleRest = combo.rest;
-                    m.tripleTeamIdx = teamIdx;
-                    comboIdx++;
-                }
-            });
+        const inRound = new Set();
+        let taken = 0;
+        const toRemove = [];
+
+        for (let i = 0; i < pool.length && taken < maxCourts; i++) {
+            const m = pool[i];
+            if (inRound.has(m.teams[0]) || inRound.has(m.teams[1])) continue;
+            selected.push({ ...m, round: r });
+            inRound.add(m.teams[0]);
+            inRound.add(m.teams[1]);
+            playCount[m.teams[0]]++;
+            playCount[m.teams[1]]++;
+            toRemove.push(i);
+            taken++;
         }
+
+        for (let i = toRemove.length - 1; i >= 0; i--) {
+            pool.splice(toRemove[i], 1);
+        }
+
+        const counts = shuffledParticipants.map(p => playCount[p]);
+        const minCount = Math.min(...counts);
+        if (minCount >= 1 && counts.every(c => c === minCount)) break;
     }
 
     return selected;
