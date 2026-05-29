@@ -85,8 +85,17 @@
                         </div>
                     </div>
                     <form id="add-player-form" class="player-input-row">
-                        <input class="player-input" type="text" id="player-name"
-                               placeholder="พิมพ์ชื่อผู้เล่น หรือทีม" required />
+                        <div class="player-input-wrap">
+                            <input class="player-input" type="text" id="player-name"
+                                   placeholder="พิมพ์ชื่อผู้เล่น หรือทีม" required
+                                   autocomplete="off" role="combobox" aria-expanded="false"
+                                   aria-autocomplete="list" aria-controls="name-suggestions" />
+                            <button type="button" class="roster-toggle" id="roster-toggle"
+                                    aria-label="แสดงรายชื่อที่จำไว้" style="display:none;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                            </button>
+                            <div class="name-suggestions" id="name-suggestions" role="listbox"></div>
+                        </div>
                         <button class="btn-add" type="submit">+ เพิ่ม</button>
                     </form>
                     <div id="players-list" class="player-chips"></div>
@@ -169,6 +178,14 @@
 
     </main>
 
+    <!-- Sync Overlay — blocks interaction until Firebase initial sync completes -->
+    <div class="sync-overlay" id="sync-overlay">
+        <div class="sync-overlay-inner">
+            <div class="sync-spinner" aria-hidden="true"></div>
+            <p class="sync-overlay-text">กำลังโหลดข้อมูล…</p>
+        </div>
+    </div>
+
     <!-- QR Code Modal -->
     <div class="qr-overlay" id="qr-overlay">
         <div class="qr-modal">
@@ -196,6 +213,9 @@
         </div>
     </footer>
 
+    <script src="sync-guard.js"></script>
+    <script src="schedule.js"></script>
+    <script src="known-names.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

@@ -23,27 +23,74 @@ let state = {
 };
 
 // ===== Firebase Real-time Sync =====
-let isSyncing = false;   // prevent save loop when receiving remote updates
+let isSyncing = false;             // prevent save loop while applying a remote snapshot
 let saveTimer = null;
 
-function saveState() {
-    if (isSyncing) return;
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-        dbRef.set({
+// `serverSnapshotReceived` is the gate that prevents data loss: it becomes true
+// ONLY after we have actually heard the real state from the server (a snapshot,
+// even a null one = genuinely empty DB).  Until then `state` is just the empty
+// default, so writing would wipe real data on the server.  We therefore refuse
+// to save until this is true.
+//
+// (Replaces the old `initialLoadComplete`, whose 8-second safety net flipped it
+// to true while `state` was still empty — so a single tap on a slow connection
+// could overwrite everyone's data with nothing.  That was the "data disappears
+// by itself" bug.)
+let serverSnapshotReceived = false;
+
+// Whether the last server snapshot we saw actually contained data.  Used as a
+// second guard so an empty local state can never silently wipe a non-empty
+// server unless the user explicitly asked to clear/remove.
+let serverHadData = false;
+
+// Whether we hydrated from a local cache at startup, and whether the first
+// server snapshot has been processed.  Together they let us safely merge — not
+// clobber — edits typed on a fresh (cacheless) device before the first sync.
+let startedWithCache = false;
+let firstSnapshotApplied = false;
+
+// Local recovery cache.  Firebase is the shared source of truth, but a reload
+// (e.g. toggling the browser's responsive/device mode) wipes in-memory state
+// before a debounced/slow Firebase write can land — losing data the user just
+// typed.  We therefore mirror every change into localStorage *synchronously*
+// and hydrate from it instantly on load, then reconcile with Firebase.
+const LOCAL_CACHE_KEY = 'bmStateCache';
+
+// Timestamp of our most recent local edit (ms).  null = no local edits yet.
+// Compared against the server's updatedAt to decide who wins on a snapshot.
+let localUpdatedAt = null;
+
+function writeLocalCache() {
+    try {
+        localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify({
             players: state.players,
             settings: state.settings,
             matches: state.matches,
             scores: state.scores,
-            history: state.history
-        });
-    }, 300);
+            history: state.history,
+            updatedAt: localUpdatedAt
+        }));
+    } catch { /* storage disabled or full — Firebase remains the backstop */ }
 }
 
-// Real-time listener — fires on initial load + every remote change
-dbRef.on('value', (snapshot) => {
-    isSyncing = true;
-    const data = snapshot.val();
+function readLocalCache() {
+    try {
+        const raw = localStorage.getItem(LOCAL_CACHE_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+}
+
+// The app renders instantly from cache (or as an empty board) and syncs with
+// Firebase in the background, so the old blocking "loading data" overlay is no
+// longer shown.  hideSyncOverlay stays as a harmless no-op guard in case any
+// markup still carries the class.
+function hideSyncOverlay() {
+    const overlay = document.getElementById('sync-overlay');
+    if (overlay) overlay.classList.remove('open');
+}
+
+// Copy a Firebase snapshot into local state and remember whether it had data.
+function applySnapshot(data) {
     if (data) {
         state.players = data.players || [];
         state.settings = data.settings || { mode: 'singles', courts: 1 };
@@ -51,9 +98,137 @@ dbRef.on('value', (snapshot) => {
         state.scores = data.scores || {};
         state.history = data.history || {};
     }
+    // `data` is null only for a brand-new database that has never been written;
+    // in that case we keep the empty default state.
+    serverHadData = !!data && !isStateEmpty(state);
+}
+
+// Persist current state to Firebase.
+//   allowEmpty: pass true ONLY from explicit user actions that legitimately
+//   empty the data (the clear buttons, removing the last player).  Every other
+//   caller leaves it false so a stray empty state can never wipe the server.
+function saveState({ allowEmpty = false } = {}) {
+    // Cache locally first — synchronous and instant, so the edit survives a
+    // reload even if the Firebase write below is debounced, slow, blocked by the
+    // guard, or Firebase never connected.  This is the recovery copy.
+    localUpdatedAt = Date.now();
+    writeLocalCache();
+
+    if (!shouldPersist({ isSyncing, serverSnapshotReceived, state, allowEmpty, serverHadData })) {
+        return;
+    }
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+        dbRef.set({
+            players: state.players,
+            settings: state.settings,
+            matches: state.matches,
+            scores: state.scores,
+            history: state.history,
+            updatedAt: localUpdatedAt
+        });
+    }, 300);
+}
+
+// Push the current local state to Firebase immediately, bypassing the debounce.
+// Used when reconciliation decides the local cache holds newer, unsynced edits.
+function flushLocalToFirebase() {
+    clearTimeout(saveTimer);
+    dbRef.set({
+        players: state.players,
+        settings: state.settings,
+        matches: state.matches,
+        scores: state.scores,
+        history: state.history,
+        updatedAt: localUpdatedAt
+    });
+}
+
+// Handle an incoming server snapshot (initial load, real-time change, or
+// visibility re-sync).  Reconciles it against our local cache so edits made
+// just before a reload are not overwritten by a stale/empty server.
+function handleSnapshot(data) {
+    // A pending local save would write our pre-sync state on top of the data we
+    // are about to apply.  Cancel it.
+    clearTimeout(saveTimer);
+
+    const serverUpdatedAt = data && data.updatedAt != null ? data.updatedAt : null;
+    const serverEmpty = isStateEmpty(data || null);
+    const localEmpty = isStateEmpty(state);
+
+    // First snapshot on a cacheless device where the user already typed something
+    // (and the server also has data): merge so neither side is lost.
+    if (!firstSnapshotApplied && !startedWithCache && !localEmpty && !serverEmpty) {
+        isSyncing = true;
+        applySnapshot(mergeInitialStates(state, data));
+        localUpdatedAt = Date.now();
+        writeLocalCache();
+        serverSnapshotReceived = true;
+        firstSnapshotApplied = true;
+        flushLocalToFirebase();          // push the merged result up
+        renderAll();
+        isSyncing = false;
+        hideSyncOverlay();
+        return;
+    }
+
+    if (localCacheWins({ localUpdatedAt, serverUpdatedAt, serverEmpty, localEmpty })) {
+        // Our local cache has edits the server hasn't seen (typed just before a
+        // reload).  Keep local state and push it up instead of being clobbered.
+        serverHadData = !serverEmpty;
+        serverSnapshotReceived = true;
+        firstSnapshotApplied = true;
+        flushLocalToFirebase();
+        renderAll();
+        hideSyncOverlay();
+        return;
+    }
+
+    isSyncing = true;
+    applySnapshot(data);
+    localUpdatedAt = serverUpdatedAt;
+    writeLocalCache();               // keep the cache in step with the server
+    serverSnapshotReceived = true;   // we now know the true server state → saves allowed
+    firstSnapshotApplied = true;
     renderAll();
     isSyncing = false;
+    hideSyncOverlay();
+}
+
+// Real-time listener — fires on initial load + every remote change
+dbRef.on('value', (snapshot) => {
+    handleSnapshot(snapshot.val());
 });
+
+// If the tab was backgrounded/suspended, our in-memory state may be stale.
+// Force a fresh re-sync from Firebase before allowing any new save.
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    serverSnapshotReceived = false;  // block saves until the re-sync completes
+    // Re-sync silently in the background — the current data stays on screen, so
+    // there is no need to blank it out behind the loading overlay.
+    dbRef.once('value')
+        .then((snapshot) => handleSnapshot(snapshot.val()))
+        .catch(() => {
+            // Re-sync failed (offline, etc.).  Our in-memory state is still the
+            // last good server data, so re-enable saves rather than locking the
+            // user out — saving that unchanged data back is non-destructive.
+            serverSnapshotReceived = true;
+            hideSyncOverlay();
+        });
+});
+
+// Safety net: if Firebase never responds (offline, blocked, etc.), hide the
+// overlay after a few seconds so the user can at least view the app locally.
+// Crucially this does NOT unblock saving — `serverSnapshotReceived` stays false
+// until a real snapshot arrives, so the empty default state can never overwrite
+// real data on the server.  Saves unlock automatically once the live listener
+// above finally receives data.
+setTimeout(() => {
+    if (!serverSnapshotReceived) {
+        hideSyncOverlay();
+    }
+}, 8000);
 
 // ===== SVG Icons =====
 const ICONS = {
@@ -63,7 +238,8 @@ const ICONS = {
     userPlus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v6M23 11h-6"/></svg>',
     calendar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
     barChart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10M18 20V4M6 20v-4"/></svg>',
-    clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>'
+    clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
+    reset: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M3 13a9 9 0 1 0 3-7.7L3 8"/></svg>'
 };
 
 // ===== Empty State Helper =====
@@ -121,7 +297,8 @@ document.getElementById('players-list').addEventListener('click', e => {
     chip.classList.add('removing');
     setTimeout(() => {
         state.players.splice(idx, 1);
-        saveState();
+        // Explicit removal — may empty the list, so allow an empty write.
+        saveState({ allowEmpty: true });
         renderPlayers();
         updateClearButtons();
     }, 150);
@@ -343,7 +520,7 @@ document.getElementById('history-list').addEventListener('click', e => {
         const date = deleteBtn.dataset.date;
         if (!confirm(`ลบประวัติวันที่ ${formatThaiDate(date)}?`)) return;
         delete state.history[date];
-        saveState();
+        saveState({ allowEmpty: true });
         renderHistory();
         updateClearButtons();
         return;
@@ -502,6 +679,10 @@ function renderMatches() {
                            data-match="${match.idx}" data-side="B" />
                 </td>
                 <td class="save-cell">
+                    <button class="btn-clear-score" data-match="${match.idx}"
+                            title="ล้างคะแนน" aria-label="ล้างคะแนน"${saved ? '' : ' hidden'}>
+                        ${ICONS.reset}
+                    </button>
                     <button class="btn-save${saved ? ' btn-save--saved' : ''}"
                             data-match="${match.idx}">
                         ${saved ? ICONS.check : 'บันทึก'}
@@ -540,6 +721,10 @@ function updateMatchRowDOM(row, match) {
     saveBtn.classList.toggle('btn-save--saved', saved);
     saveBtn.innerHTML = saved ? ICONS.check : 'บันทึก';
 
+    // The clear icon is only useful once a score exists to wipe.
+    const clearBtn = row.querySelector('.btn-clear-score');
+    if (clearBtn) clearBtn.hidden = !saved;
+
     // Show or remove the completion banner without re-rendering all matches
     const container = document.getElementById('matches-container');
     const existingBanner = container.querySelector('.schedule-complete-banner');
@@ -569,6 +754,34 @@ function updateMatchRowDOM(row, match) {
 
 // Event delegation for match save buttons and quick winner select
 document.getElementById('matches-container').addEventListener('click', e => {
+    // Clear score: reset this match back to its "never scored" state, undoing
+    // its contribution to the cumulative scoreboard.  Lets a mistaken result be
+    // wiped without retyping.
+    const clearBtn = e.target.closest('.btn-clear-score');
+    if (clearBtn) {
+        const idx = parseInt(clearBtn.dataset.match, 10);
+        const match = state.matches[idx];
+        const row = clearBtn.closest('tr');
+        const wasSaved = match.scoreA != null && match.scoreB != null;
+        if (wasSaved) {
+            updateScoresForMatch(match, match.scoreA, match.scoreB, null, null);
+            match.scoreA = null;
+            match.scoreB = null;
+            saveState();
+        }
+        // updateMatchRowDOM clears the inputs, restores the "บันทึก" button,
+        // drops the winner highlight, and hides this clear icon.
+        updateMatchRowDOM(row, match);
+        if (wasSaved) {
+            requestAnimationFrame(() => {
+                renderScoreboard();
+                saveHistorySnapshot();
+                updateClearButtons();
+            });
+        }
+        return;
+    }
+
     // Quick winner select: click on team name to mark as winner (click again to clear)
     const teamBtn = e.target.closest('.team-btn');
     if (teamBtn) {
@@ -626,6 +839,27 @@ document.getElementById('matches-container').addEventListener('click', e => {
             updateClearButtons();
         });
     }
+});
+
+// When the user edits a score on an already-saved row, flip the save button
+// from its ✓ "saved" state back to "บันทึก" so it's obvious the corrected score
+// must be re-saved.  This makes fixing an accidental tap discoverable — the
+// inputs were always editable, but the lone checkmark looked final.
+document.getElementById('matches-container').addEventListener('input', e => {
+    const input = e.target.closest('.score-input');
+    if (!input) return;
+    const row = input.closest('tr');
+    const saveBtn = row.querySelector('.btn-save');
+    if (saveBtn.classList.contains('btn-save--saved')) {
+        saveBtn.classList.remove('btn-save--saved');
+        saveBtn.textContent = 'บันทึก';
+    }
+    // Reveal the clear icon as soon as there's anything to wipe — including
+    // values typed but not yet saved.
+    const inputA = row.querySelector('[data-side="A"]');
+    const inputB = row.querySelector('[data-side="B"]');
+    const clearBtn = row.querySelector('.btn-clear-score');
+    if (clearBtn) clearBtn.hidden = inputA.value === '' && inputB.value === '';
 });
 
 // ===== Participants Helper =====
@@ -720,159 +954,18 @@ function isScheduleComplete() {
         state.matches.every(m => m.scoreA != null && m.scoreB != null);
 }
 
-// ===== Shuffle (Fisher-Yates) =====
-function shuffle(arr) {
-    const a = [...arr];
-    for (let i = a.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [a[i], a[j]] = [a[j], a[i]];
-    }
-    return a;
-}
-
-// ===== Round-Robin (Circle Method) =====
-function roundRobin(participants) {
-    const n = participants.length;
-    if (n < 2) return [];
-
-    const list = [...participants];
-    if (n % 2 === 1) list.push(null); // BYE = sit out
-
-    const total = list.length;
-    const numRounds = total - 1;
-    const half = total / 2;
-
-    const rotating = [];
-    for (let i = 1; i < total; i++) rotating.push(i);
-
-    const allMatches = [];
-
-    for (let r = 0; r < numRounds; r++) {
-        const pairs = [[0, rotating[rotating.length - 1]]];
-        for (let i = 0; i < half - 1; i++) {
-            pairs.push([rotating[i], rotating[rotating.length - 2 - i]]);
-        }
-
-        for (const [ai, bi] of pairs) {
-            const a = list[ai];
-            const b = list[bi];
-            if (a !== null && b !== null) {
-                allMatches.push({
-                    teams: [a, b],
-                    scoreA: null,
-                    scoreB: null,
-                    round: r + 1
-                });
-            }
-        }
-
-        rotating.unshift(rotating.pop());
-    }
-
-    return allMatches;
-}
-
-function makeSchedule() {
-    // Count individual appearances in the CURRENT schedule (before replacing it).
-    // Used as tiebreaker so players who played more previously are deprioritised.
-    const prevPlays = {};
-    state.players.forEach(p => { prevPlays[p] = 0; });
-    state.matches.forEach(m => {
-        getMatchPlayers(m, 0).forEach(p => { if (p in prevPlays) prevPlays[p]++; });
-        getMatchPlayers(m, 1).forEach(p => { if (p in prevPlays) prevPlays[p]++; });
+// ===== Schedule generation =====
+// The pairing/fairness logic lives in schedule.js (loaded as a global before this
+// file) so it can be unit-tested without a browser.  getMatchPlayers is passed in
+// so previous-schedule play counts honour the legacy "triple team" lineup.
+function generateSchedule() {
+    return makeSchedule({
+        players: state.players,
+        mode: state.settings.mode,
+        courts: state.settings.courts,
+        prevMatches: state.matches,
+        getPlayers: getMatchPlayers
     });
-
-    const maxCourts = state.settings.courts;
-
-    if (state.settings.mode === 'doubles') {
-        // Individual-based pairing: each round, pick the 4×courts players who have
-        // played least and randomly pair them into teams.  No fixed teams or triple
-        // team concept.  Guarantees all players end up with equal play counts.
-        // Example: 9 players, 1 court → 9 rounds, everyone plays exactly 4 times.
-        const playCount = {};
-        state.players.forEach(p => { playCount[p] = 0; });
-        const selected = [];
-
-        for (let r = 1; r <= 1000; r++) {
-            // Shuffle first so equal-count players are picked randomly, then
-            // stable-sort ascending by playCount with prevPlays as tiebreaker.
-            const sorted = shuffle([...state.players])
-                .sort((a, b) => (playCount[a] - playCount[b]) || (prevPlays[a] - prevPlays[b]));
-
-            const usedThisRound = new Set();
-            let taken = 0;
-
-            for (let c = 0; c < maxCourts; c++) {
-                const available = sorted.filter(p => !usedThisRound.has(p));
-                if (available.length < 4) break;
-                const picked = available.slice(0, 4);
-                const s = shuffle(picked);
-                selected.push({
-                    teams: [s[0] + ' / ' + s[1], s[2] + ' / ' + s[3]],
-                    scoreA: null,
-                    scoreB: null,
-                    round: r
-                });
-                picked.forEach(p => { usedThisRound.add(p); playCount[p]++; });
-                taken++;
-            }
-
-            if (taken === 0) break;
-
-            // Stop when every player has played the same number of times (>=1)
-            const counts = state.players.map(p => playCount[p]);
-            if (Math.min(...counts) >= 1 && Math.min(...counts) === Math.max(...counts)) break;
-        }
-
-        return selected;
-    }
-
-    // Singles mode: greedy round-robin pool scheduling
-    const shuffledParticipants = shuffle([...state.players]);
-    const allMatches = roundRobin(shuffledParticipants);
-
-    const playCount = {};
-    shuffledParticipants.forEach(p => { playCount[p] = 0; });
-
-    const pool = shuffle(allMatches);
-    const selected = [];
-
-    for (let r = 1; pool.length > 0; r++) {
-        pool.sort((a, b) => {
-            const minA = Math.min(playCount[a.teams[0]], playCount[a.teams[1]]);
-            const minB = Math.min(playCount[b.teams[0]], playCount[b.teams[1]]);
-            if (minA !== minB) return minA - minB;
-            const sumA = playCount[a.teams[0]] + playCount[a.teams[1]];
-            const sumB = playCount[b.teams[0]] + playCount[b.teams[1]];
-            return sumA - sumB;
-        });
-
-        const inRound = new Set();
-        let taken = 0;
-        const toRemove = [];
-
-        for (let i = 0; i < pool.length && taken < maxCourts; i++) {
-            const m = pool[i];
-            if (inRound.has(m.teams[0]) || inRound.has(m.teams[1])) continue;
-            selected.push({ ...m, round: r });
-            inRound.add(m.teams[0]);
-            inRound.add(m.teams[1]);
-            playCount[m.teams[0]]++;
-            playCount[m.teams[1]]++;
-            toRemove.push(i);
-            taken++;
-        }
-
-        for (let i = toRemove.length - 1; i >= 0; i--) {
-            pool.splice(toRemove[i], 1);
-        }
-
-        const counts = shuffledParticipants.map(p => playCount[p]);
-        const minCount = Math.min(...counts);
-        if (minCount >= 1 && counts.every(c => c === minCount)) break;
-    }
-
-    return selected;
 }
 
 // ===== Tab Navigation =====
@@ -909,6 +1002,7 @@ function updateTabBadge() {
 
 // ===== Render All =====
 function renderAll() {
+    seedKnownNamesFromState();
     renderPlayers();
     renderSettings();
     renderMatches();
@@ -919,17 +1013,202 @@ function renderAll() {
     updateClearButtons();
 }
 
-// ===== Event: Add Player =====
-document.getElementById('add-player-form').addEventListener('submit', e => {
-    e.preventDefault();
-    const nameInput = document.getElementById('player-name');
-    const name = nameInput.value.trim();
-    if (name && !state.players.includes(name)) {
+// ===== Name Suggestions (remembered roster) =====
+// A device-local roster of every name ever added, shown as a dropdown so regular
+// players can be re-added in a tap instead of being retyped each session. Stored
+// in localStorage (separate from the Firebase-synced state) so it never touches
+// the delicate save/merge guards. The pure list logic lives in known-names.js.
+const KNOWN_NAMES_KEY = 'bmKnownNames';
+
+let knownNames = readKnownNames();
+let currentSuggestions = [];     // names currently shown in the dropdown (by index)
+let activeSuggestion = -1;       // keyboard-highlighted index, -1 = none
+
+function readKnownNames() {
+    try {
+        const raw = localStorage.getItem(KNOWN_NAMES_KEY);
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr : [];
+    } catch { return []; }
+}
+
+function saveKnownNames() {
+    try {
+        localStorage.setItem(KNOWN_NAMES_KEY, JSON.stringify(knownNames));
+    } catch { /* storage disabled/full — roster is a convenience, safe to drop */ }
+}
+
+// Remember a name (most-recently-used first).
+function recordKnownName(name) {
+    knownNames = KnownNames.addKnownName(knownNames, name);
+    saveKnownNames();
+    updateRosterToggle();
+}
+
+// Pull any names already on the board (current players + anyone with a score
+// history) into the roster, so suggestions work even for an existing board and
+// quietly benefit from names synced in from other devices.
+function seedKnownNamesFromState() {
+    const names = [...state.players, ...Object.keys(state.scores || {})];
+    const merged = KnownNames.mergeKnownNames(knownNames, names);
+    if (merged.length !== knownNames.length) {
+        knownNames = merged;
+        saveKnownNames();
+    }
+    updateRosterToggle();
+}
+
+// Add a player by name (shared by the form, a suggestion tap, and Enter-on-
+// highlighted). Returns true when the name was valid. Always records the name.
+function addPlayerByName(rawName) {
+    const name = KnownNames.normalizeName(rawName);
+    if (!name) return false;
+    if (!state.players.includes(name)) {
         state.players.push(name);
-        nameInput.value = '';
         saveState();
         renderPlayers();
         updateClearButtons();
+    }
+    recordKnownName(name);
+    return true;
+}
+
+const suggestionsBox = document.getElementById('name-suggestions');
+const playerNameInput = document.getElementById('player-name');
+const rosterToggle = document.getElementById('roster-toggle');
+
+// Is this name already in the current player list? (case-insensitive)
+function isAlreadyAdded(name) {
+    const k = KnownNames.normalizeName(name).toLowerCase();
+    return state.players.some(p => p.toLowerCase() === k);
+}
+
+// Show/hide the toggle chevron — it is only useful once something is remembered.
+function updateRosterToggle() {
+    rosterToggle.style.display = knownNames.length ? '' : 'none';
+}
+
+function renderSuggestions() {
+    // Show the FULL remembered list (matching the typed filter). Names already in
+    // the current list are shown but flagged "added" so the roster is never
+    // mysteriously empty — they just can't be re-added.
+    currentSuggestions = KnownNames.filterKnownNames(knownNames, playerNameInput.value, [], 50);
+    if (currentSuggestions.length === 0) {
+        closeSuggestions();
+        return;
+    }
+    suggestionsBox.innerHTML = currentSuggestions.map((name, i) => {
+        const added = isAlreadyAdded(name);
+        return `
+        <div class="suggestion-item${added ? ' added' : ''}" role="option" data-idx="${i}"${added ? ' aria-selected="true"' : ''}>
+            ${added ? `<span class="suggestion-check" aria-label="เพิ่มแล้ว">${ICONS.check}</span>` : ''}
+            <span class="suggestion-name">${name}</span>
+            <button type="button" class="suggestion-remove" data-idx="${i}"
+                    aria-label="ลบ ${name} ออกจากรายการที่จำไว้">${ICONS.x}</button>
+        </div>`;
+    }).join('');
+    suggestionsBox.classList.add('open');
+    rosterToggle.classList.add('open');
+    playerNameInput.setAttribute('aria-expanded', 'true');
+    activeSuggestion = -1;
+}
+
+function closeSuggestions() {
+    suggestionsBox.classList.remove('open');
+    rosterToggle.classList.remove('open');
+    suggestionsBox.innerHTML = '';
+    playerNameInput.setAttribute('aria-expanded', 'false');
+    activeSuggestion = -1;
+}
+
+// Explicit affordance: tap the chevron to open/close the remembered list.
+rosterToggle.addEventListener('click', e => {
+    e.stopPropagation();
+    if (suggestionsBox.classList.contains('open')) {
+        closeSuggestions();
+    } else {
+        renderSuggestions();
+        playerNameInput.focus();
+    }
+});
+
+function highlightActive() {
+    suggestionsBox.querySelectorAll('.suggestion-item').forEach((el, i) => {
+        el.classList.toggle('active', i === activeSuggestion);
+        if (i === activeSuggestion) el.scrollIntoView({ block: 'nearest' });
+    });
+}
+
+// Open on a deliberate tap/click (NOT on programmatic .focus() from renderPlayers,
+// which would otherwise pop the dropdown open on every render/sync).
+playerNameInput.addEventListener('click', renderSuggestions);
+playerNameInput.addEventListener('input', renderSuggestions);
+
+playerNameInput.addEventListener('keydown', e => {
+    const isOpen = suggestionsBox.classList.contains('open');
+    if (e.key === 'Escape') {
+        if (isOpen) { e.preventDefault(); closeSuggestions(); }
+        return;
+    }
+    if (e.key === 'ArrowDown') {
+        if (!isOpen) renderSuggestions();
+        if (currentSuggestions.length) {
+            e.preventDefault();
+            activeSuggestion = (activeSuggestion + 1) % currentSuggestions.length;
+            highlightActive();
+        }
+        return;
+    }
+    if (e.key === 'ArrowUp') {
+        if (isOpen && currentSuggestions.length) {
+            e.preventDefault();
+            activeSuggestion = (activeSuggestion - 1 + currentSuggestions.length) % currentSuggestions.length;
+            highlightActive();
+        }
+        return;
+    }
+    if (e.key === 'Enter' && isOpen && activeSuggestion >= 0
+        && !isAlreadyAdded(currentSuggestions[activeSuggestion])) {
+        // A (re-addable) suggestion is highlighted — add it instead of the typed text.
+        e.preventDefault();
+        addPlayerByName(currentSuggestions[activeSuggestion]);
+        playerNameInput.value = '';
+        renderSuggestions();
+    }
+});
+
+// Tap a suggestion to add it; tap its × to forget it. Delegated.
+suggestionsBox.addEventListener('click', e => {
+    const removeBtn = e.target.closest('.suggestion-remove');
+    if (removeBtn) {
+        e.stopPropagation();
+        knownNames = KnownNames.removeKnownName(knownNames, currentSuggestions[+removeBtn.dataset.idx]);
+        saveKnownNames();
+        updateRosterToggle();
+        renderSuggestions();         // refresh, keep open
+        playerNameInput.focus();
+        return;
+    }
+    const item = e.target.closest('.suggestion-item');
+    if (!item || item.classList.contains('added')) return;   // already in the list
+    addPlayerByName(currentSuggestions[+item.dataset.idx]);
+    playerNameInput.value = '';
+    renderSuggestions();             // refresh (now flagged "added"), keep open
+    playerNameInput.focus();
+});
+
+// Close when clicking anywhere outside the input + dropdown.
+document.addEventListener('click', e => {
+    if (!e.target.closest('.player-input-wrap')) closeSuggestions();
+});
+
+// ===== Event: Add Player =====
+document.getElementById('add-player-form').addEventListener('submit', e => {
+    e.preventDefault();
+    if (addPlayerByName(playerNameInput.value)) {
+        playerNameInput.value = '';
+        closeSuggestions();
+        playerNameInput.focus();
     }
 });
 
@@ -937,7 +1216,7 @@ document.getElementById('add-player-form').addEventListener('submit', e => {
 document.getElementById('generate-btn').addEventListener('click', () => {
     const participants = getParticipants();
     if (participants.length < 2) return;
-    state.matches = makeSchedule();
+    state.matches = generateSchedule();
     saveState();
     renderMatches();
     renderScoreboard();
@@ -951,7 +1230,7 @@ document.getElementById('generate-btn').addEventListener('click', () => {
 document.getElementById('reshuffle-btn').addEventListener('click', () => {
     const participants = getParticipants();
     if (participants.length < 2) return;
-    state.matches = makeSchedule();
+    state.matches = generateSchedule();
     saveState();
     renderMatches();
     renderScoreboard();
@@ -966,21 +1245,21 @@ document.getElementById('clear-players-btn').addEventListener('click', () => {
     if (!confirm('ล้างรายชื่อผู้เล่นทั้งหมด?')) return;
     state.players = [];
     state.matches = [];
-    saveState();
+    saveState({ allowEmpty: true });
     renderAll();
 });
 
 document.getElementById('clear-schedule-btn').addEventListener('click', () => {
     if (!confirm('ล้างตารางการแข่งขัน?')) return;
     state.matches = [];
-    saveState();
+    saveState({ allowEmpty: true });
     renderAll();
 });
 
 document.getElementById('clear-scores-btn').addEventListener('click', () => {
     if (!confirm('ล้างคะแนนสะสมทั้งหมด?')) return;
     state.scores = {};
-    saveState();
+    saveState({ allowEmpty: true });
     renderScoreboard();
     updateClearButtons();
 });
@@ -988,7 +1267,7 @@ document.getElementById('clear-scores-btn').addEventListener('click', () => {
 document.getElementById('clear-history-btn').addEventListener('click', () => {
     if (!confirm('ล้างประวัติอันดับรายวันทั้งหมด?')) return;
     state.history = {};
-    saveState();
+    saveState({ allowEmpty: true });
     renderHistory();
     updateClearButtons();
 });
@@ -1000,7 +1279,7 @@ document.getElementById('clear-all-btn').addEventListener('click', () => {
     state.matches = [];
     state.scores = {};
     state.history = {};
-    saveState();
+    saveState({ allowEmpty: true });
     renderAll();
     switchTab('settings');
 });
@@ -1115,6 +1394,22 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 // ===== Initial Load =====
 // Apply saved theme (before content renders to avoid flash)
 applyTheme(localStorage.getItem('bmTheme') || 'system');
+
+// Hydrate instantly from the local cache so a reload (e.g. toggling responsive
+// mode) never flashes empty and edits made before the last sync are not lost.
+// Saves stay blocked until a real server snapshot arrives; handleSnapshot then
+// reconciles this cache with Firebase and pushes up anything newer.
+const cachedState = readLocalCache();
+if (cachedState) {
+    startedWithCache = true;
+    applySnapshot(cachedState);
+    localUpdatedAt = cachedState.updatedAt != null ? cachedState.updatedAt : null;
+    renderAll();
+    // We already have data on screen — don't block it behind the loading
+    // overlay while Firebase reconciles in the background.  The overlay is only
+    // meaningful for a genuine first-ever load with nothing cached.
+    hideSyncOverlay();
+}
 
 // Firebase onValue listener (above) handles initial data load + real-time sync
 // renderAll() is called automatically when data arrives

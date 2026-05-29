@@ -637,6 +637,145 @@ input[type=number] {
   transform: scale(0.98);
 }
 
+/* ===== Name Suggestions Dropdown ===== */
+.player-input-wrap {
+  position: relative;
+  flex: 1;
+}
+
+.player-input-wrap .player-input {
+  width: 100%;
+  padding-right: 44px;   /* room for the roster toggle */
+}
+
+.roster-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.roster-toggle:hover {
+  color: var(--color-accent);
+  background: var(--color-accent-light);
+}
+
+.roster-toggle svg {
+  width: 18px;
+  height: 18px;
+  transition: transform 0.2s ease;
+}
+
+.roster-toggle.open svg {
+  transform: rotate(180deg);
+}
+
+.name-suggestions {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: 2px solid var(--color-border);
+  border-radius: 16px;
+  box-shadow: 0 12px 32px var(--color-modal-shadow);
+  padding: 6px;
+  display: none;
+}
+
+.name-suggestions.open {
+  display: block;
+}
+
+.suggestion-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.suggestion-item:hover,
+.suggestion-item.active {
+  background: var(--color-accent-light);
+}
+
+.suggestion-name {
+  flex: 1;
+  font-size: 14px;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A remembered name that is already in the current list: shown for reference,
+   not re-addable (tap does nothing), but still removable from the roster. */
+.suggestion-item.added {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.suggestion-item.added:hover {
+  background: transparent;
+}
+
+.suggestion-check {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--color-accent);
+}
+
+.suggestion-check svg {
+  width: 16px;
+  height: 16px;
+}
+
+.suggestion-remove {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.suggestion-remove:hover {
+  background: var(--color-danger-light);
+  color: var(--color-danger);
+}
+
+.suggestion-remove svg {
+  width: 15px;
+  height: 15px;
+}
+
 /* ===== Player Chips ===== */
 .player-chips {
   display: flex;
@@ -1008,7 +1147,8 @@ input[type=number] {
 /* ===== Save Button ===== */
 .save-cell {
   text-align: right;
-  width: 80px;
+  width: 130px;
+  white-space: nowrap;
 }
 
 .btn-save {
@@ -1041,6 +1181,39 @@ input[type=number] {
 .btn-save--saved svg {
   width: 16px;
   height: 16px;
+}
+
+.btn-clear-score {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin-right: 6px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  vertical-align: middle;
+  transition: all 0.15s ease;
+}
+
+.btn-clear-score svg {
+  width: 16px;
+  height: 16px;
+}
+
+.btn-clear-score:hover {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+  background: var(--color-danger-light);
+}
+
+/* `hidden` must beat the inline-flex above, which would otherwise show it. */
+.btn-clear-score[hidden] {
+  display: none;
 }
 
 /* ===== Scoreboard Table ===== */
@@ -1471,4 +1644,51 @@ input[type=number] {
     width: 16px;
     height: 16px;
   }
+}
+
+/* ===== Sync Overlay ===== */
+.sync-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--color-overlay);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+
+.sync-overlay.open {
+  display: flex;
+}
+
+.sync-overlay-inner {
+  background: var(--color-surface);
+  border-radius: 16px;
+  padding: 28px 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 12px 32px var(--color-modal-shadow);
+}
+
+.sync-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: sync-spin 0.8s linear infinite;
+}
+
+.sync-overlay-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+@keyframes sync-spin {
+  to { transform: rotate(360deg); }
 }

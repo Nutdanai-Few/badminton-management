@@ -1,0 +1,9 @@
+{
+  "name": "badminton-management",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Badminton match scheduler (static site)",
+  "scripts": {
+    "test": "node --test"
+  }
+}
