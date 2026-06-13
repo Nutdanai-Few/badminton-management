@@ -229,5 +229,140 @@
         return selected;
     }
 
-    return { shuffle, roundRobin, makeSchedule };
+    // ===== Mid-game re-pairing =====
+    // Continue an in-progress schedule after the roster has changed mid-session (a
+    // player left, or a latecomer joined).  The caller keeps the matches that were
+    // already PLAYED (scored) and passes them as `playedMatches`; this returns ONLY
+    // the new matches to append.  Players not in `players` (i.e. removed) are never
+    // paired again — their already-played games and stats stand as-is.
+    //
+    // Fairness rule = the SAME as a normal schedule: keep pairing (fewest-played
+    // first, full courts) until every CURRENT player has played the same number of
+    // games, then stop.  Each player's games-played carries over (no reset), so a
+    // player who is ahead simply RESTS while the others catch up to them — nobody is
+    // dragged into extra games past the equal level.  A latecomer starts behind and
+    // is paired more often until they reach everyone else's level.
+    //   players        — current roster (withdrawn players already removed / latecomers added)
+    //   mode           — 'doubles' | 'singles'
+    //   courts         — courts available per round
+    //   playedMatches  — the matches already played (kept by the caller)
+    //   getPlayers     — (match, teamIdx) => string[]; honours the legacy triple team
+    //   rand           — injectable RNG
+    function continueSchedule({ players, mode, courts, playedMatches = [], getPlayers = defaultGetPlayers, rand = Math.random }) {
+        const seatsPerCourt = mode === 'doubles' ? 4 : 2;
+
+        // Games already played by each CURRENT player (withdrawn players are ignored
+        // because they are not in `players`).  Also find the last round number so the
+        // appended matches continue the numbering.
+        const playCount = {};
+        players.forEach(p => { playCount[p] = 0; });
+        let maxRound = 0;
+        playedMatches.forEach(m => {
+            if (m.round > maxRound) maxRound = m.round;
+            getPlayers(m, 0).forEach(p => { if (p in playCount) playCount[p]++; });
+            getPlayers(m, 1).forEach(p => { if (p in playCount) playCount[p]++; });
+        });
+
+        // Nobody has played yet -> there is nothing to "continue" from, so build a full
+        // fresh schedule.  (Also makes this function correct when called standalone.)
+        if (!players.length || Math.max(...players.map(p => playCount[p])) === 0) {
+            return makeSchedule({ players, mode, courts, prevMatches: playedMatches, getPlayers, rand });
+        }
+
+        // Too few players left to fill even one court.
+        if (players.length < seatsPerCourt) return [];
+
+        // If every round would seat the entire roster (courts big enough for everyone),
+        // nobody can ever rest, so an imbalance left by a departed/late player can never
+        // be evened out by adding rounds.  Don't loop forever — return nothing.
+        const seatsPerRound = seatsPerCourt * Math.min(courts, Math.floor(players.length / seatsPerCourt));
+        if (seatsPerRound >= players.length) return [];
+
+        // Carry partner history over from the played matches so fresh partnerships are
+        // still preferred across the whole session (doubles only).
+        const partnerCount = {};
+        players.forEach(p => { partnerCount[p] = {}; });
+        const partnered = (a, b) => partnerCount[a][b] || 0;
+        const addPartner = (a, b) => {
+            partnerCount[a][b] = partnered(a, b) + 1;
+            partnerCount[b][a] = partnered(b, a) + 1;
+        };
+        if (mode === 'doubles') {
+            playedMatches.forEach(m => {
+                [0, 1].forEach(t => {
+                    const ps = getPlayers(m, t).filter(p => p in partnerCount);
+                    for (let i = 0; i < ps.length; i++) {
+                        for (let j = i + 1; j < ps.length; j++) addPartner(ps[i], ps[j]);
+                    }
+                });
+            });
+        }
+
+        const SPLITS = [
+            [[0, 1], [2, 3]],
+            [[0, 2], [1, 3]],
+            [[0, 3], [1, 2]],
+        ];
+
+        const lastPlayed = {};
+        players.forEach(p => { lastPlayed[p] = 0; });
+        const selected = [];
+
+        const spread = () => {
+            const c = players.map(p => playCount[p]);
+            return Math.max(...c) - Math.min(...c);
+        };
+
+        // Normal scheduling, just seeded with the games already played: each round
+        // seats the fewest-played players (full courts), so whoever is ahead rests
+        // until the rest catch up.  Stop the instant everyone is level (spread 0).
+        // `seatsPerRound < players.length` (guaranteed above) means there is always
+        // someone able to rest, so the gap shrinks every round and this terminates.
+        // The +1000 ceiling is only a safety backstop.
+        for (let r = maxRound + 1; r <= maxRound + 1000; r++) {
+            if (spread() === 0) break;
+
+            const sorted = shuffle(players, rand)
+                .sort((a, b) =>
+                    (playCount[a] - playCount[b]) ||
+                    (lastPlayed[a] - lastPlayed[b]));
+
+            const usedThisRound = new Set();
+            let opened = 0;
+
+            for (let c = 0; c < courts; c++) {
+                const available = sorted.filter(p => !usedThisRound.has(p));
+                if (available.length < seatsPerCourt) break;
+                const picked = available.slice(0, seatsPerCourt);
+
+                if (mode === 'doubles') {
+                    let best = null, bestCost = Infinity;
+                    for (const [[i, j], [k, l]] of shuffle(SPLITS, rand)) {
+                        const cost = partnered(picked[i], picked[j]) + partnered(picked[k], picked[l]);
+                        if (cost < bestCost) { bestCost = cost; best = [[i, j], [k, l]]; }
+                    }
+                    const [[i, j], [k, l]] = best;
+                    selected.push({
+                        teams: [picked[i] + ' / ' + picked[j], picked[k] + ' / ' + picked[l]],
+                        scoreA: null, scoreB: null, round: r,
+                    });
+                    addPartner(picked[i], picked[j]);
+                    addPartner(picked[k], picked[l]);
+                } else {
+                    selected.push({
+                        teams: [picked[0], picked[1]],
+                        scoreA: null, scoreB: null, round: r,
+                    });
+                }
+                picked.forEach(p => { usedThisRound.add(p); playCount[p]++; lastPlayed[p] = r; });
+                opened++;
+            }
+
+            if (opened === 0) break;
+        }
+
+        return selected;
+    }
+
+    return { shuffle, roundRobin, makeSchedule, continueSchedule };
 });

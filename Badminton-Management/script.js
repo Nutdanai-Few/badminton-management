@@ -970,6 +970,24 @@ function generateSchedule() {
     });
 }
 
+// Mid-game re-pairing: keep the matches already PLAYED (scored), drop the unplayed
+// ones, and keep pairing the CURRENT roster until everyone has played the same number
+// of games (the normal fairness rule).  Works whether a player LEFT (remove them first
+// — they keep only the games they played) or JOINED late (add them first — they start
+// behind and are paired until they catch up).  continueSchedule continues each player's
+// games-played (no reset), so whoever is ahead simply rests while the rest catch up.
+function continueScheduleMidGame() {
+    const played = state.matches.filter(m => m.scoreA != null && m.scoreB != null);
+    const newMatches = continueSchedule({
+        players: state.players,
+        mode: state.settings.mode,
+        courts: state.settings.courts,
+        playedMatches: played,
+        getPlayers: getMatchPlayers
+    });
+    return [...played, ...newMatches];
+}
+
 // ===== Tab Navigation =====
 function switchTab(tabName) {
     // Update buttons
@@ -1301,6 +1319,56 @@ document.getElementById('reshuffle-btn').addEventListener('click', () => {
     switchTab('schedule');
 });
 
+// ===== Event: Continue mid-game (re-pair after someone leaves) =====
+// Keeps played results, drops unplayed matches, and pairs the current roster to even
+// out play counts.  Adjust the roster FIRST (remove who left / add who arrived), then
+// press this.  Shared by the button on the schedule tab and the one on the settings
+// tab (next to "จัดตารางใหม่"), so it's reachable right where the roster is edited.
+function handleContinueMidGame() {
+    const played = state.matches.filter(m => m.scoreA != null && m.scoreB != null);
+    if (played.length === 0) {
+        // Nothing played yet — this would just rebuild the whole schedule, which the
+        // "จัดตารางใหม่"/"สุ่มคู่ใหม่" buttons already do.
+        alert('ยังไม่มีคู่ที่เล่นจบ (กรอกผลแล้ว) — ใช้ปุ่ม "จัดตารางใหม่" เพื่อจับคู่ใหม่ทั้งหมด');
+        return;
+    }
+    const unplayed = state.matches.length - played.length;
+    if (!confirm(
+        `จับคู่ต่อกลางคัน?\n\n` +
+        `• เก็บ ${played.length} คู่ที่เล่นจบแล้วไว้\n` +
+        `• ตัด ${unplayed} คู่ที่ยังไม่ได้เล่นทิ้ง\n` +
+        `• จับคู่ผู้เล่นปัจจุบัน (${state.players.length} คน) ต่อไปเรื่อยๆ จนทุกคนแข่งเท่ากัน`
+    )) return;
+
+    const next = continueScheduleMidGame();
+    const added = next.length - played.length;
+    state.matches = next;
+    saveState();
+    renderMatches();
+    renderScoreboard();
+    updateGenerateButton();
+    updateTabBadge();
+    updateClearButtons();
+    switchTab('schedule');
+
+    if (added === 0) {
+        // continueSchedule added nothing: either everyone is already level, or the
+        // imbalance can't be evened out (every round seats the whole roster — nobody
+        // can rest, e.g. player count is an exact multiple of the court capacity).
+        const counts = computeScoreboard();
+        const played = state.players.map(p => (counts[p] ? counts[p].played : 0));
+        const equal = played.length > 0 && Math.min(...played) === Math.max(...played);
+        alert(equal
+            ? 'ผู้เล่นปัจจุบันแข่งเท่ากันอยู่แล้ว จึงไม่มีคู่เพิ่ม'
+            : 'จับคู่ให้แข่งเท่ากันไม่ได้ด้วยจำนวนผู้เล่น/สนามนี้ ' +
+              '(ทุกคนต้องลงเล่นทุกตา จึงไม่มีใครได้พักให้คนอื่นไล่ทัน) — ' +
+              'ลองเพิ่ม/ลดผู้เล่น หรือลดจำนวนสนาม');
+    }
+}
+
+document.getElementById('continue-btn').addEventListener('click', handleContinueMidGame);
+document.getElementById('continue-settings-btn').addEventListener('click', handleContinueMidGame);
+
 // ===== Clear Actions =====
 document.getElementById('clear-players-btn').addEventListener('click', () => {
     if (!confirm('ล้างรายชื่อผู้เล่นทั้งหมด?')) return;
@@ -1353,6 +1421,16 @@ function updateClearButtons() {
         state.matches.length > 0 ? '' : 'none';
     document.getElementById('reshuffle-btn').style.display =
         state.matches.length > 0 ? '' : 'none';
+    // Mid-game re-pair only makes sense once at least one match has been played.
+    // Surfaced both on the schedule tab and on the settings tab (where the roster is
+    // edited), so it's reachable right after adding/removing a player.
+    const hasPlayed = state.matches.some(m => m.scoreA != null && m.scoreB != null);
+    document.getElementById('continue-btn').style.display =
+        hasPlayed ? '' : 'none';
+    document.getElementById('continue-settings-btn').style.display =
+        hasPlayed ? '' : 'none';
+    document.getElementById('continue-hint').style.display =
+        hasPlayed ? '' : 'none';
 
     const hasScores = Object.keys(state.scores).some(k => state.scores[k].played > 0);
     document.getElementById('clear-scores-btn').style.display =

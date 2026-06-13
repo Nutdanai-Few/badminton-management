@@ -1059,6 +1059,31 @@ input[type=number] {
   cursor: not-allowed;
 }
 
+/* Secondary action: same shape as the primary generate button but outlined, so
+   "จับคู่ต่อ (กลางคัน)" reads as the alternative to a full reshuffle. */
+.btn-generate-secondary {
+  margin-top: 10px;
+  background: transparent;
+  border: 1.5px solid var(--color-accent);
+  color: var(--color-accent);
+  box-shadow: none;
+}
+
+.btn-generate-secondary:hover:not(:disabled) {
+  filter: none;
+  background: var(--color-accent-light);
+  box-shadow: none;
+  transform: translateY(-1px);
+}
+
+.continue-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
 /* ===== Match Round ===== */
 .match-round + .match-round {
   margin-top: 20px;

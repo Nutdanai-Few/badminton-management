@@ -136,6 +136,12 @@
                     <button id="generate-btn" class="btn-generate" disabled>
                         เพิ่มผู้เล่นอย่างน้อย 2 คน
                     </button>
+                    <button id="continue-settings-btn" class="btn-generate btn-generate-secondary" style="display:none;">
+                        ↻ จับคู่ต่อ (กลางคัน)
+                    </button>
+                    <p class="continue-hint" id="continue-hint" style="display:none;">
+                        เก็บผลที่เล่นจบแล้ว · จับคู่ผู้เล่นปัจจุบันต่อให้แข่งเท่ากัน
+                    </p>
                 </section>
 
                 <!-- Clear All -->
@@ -151,6 +157,7 @@
                         <span class="section-label">ตารางการแข่งขัน</span>
                         <div class="section-header-right">
                             <span class="section-badge" id="match-count-badge" style="display:none;">0 คู่</span>
+                            <button class="btn-reshuffle" id="continue-btn" style="display:none;">↻ จับคู่ต่อ (กลางคัน)</button>
                             <button class="btn-reshuffle" id="reshuffle-btn" style="display:none;">↺ สุ่มคู่ใหม่</button>
                             <button class="btn-clear" id="clear-schedule-btn" style="display:none;">ล้างตาราง</button>
                         </div>
