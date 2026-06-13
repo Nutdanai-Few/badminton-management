@@ -1,8 +1,12 @@
 name: Deploy to GitHub Pages
 
+# Deploy only from `main` (the release branch).  GitHub Pages' environment
+# protection rejects deploys from any other branch, so triggering on `master`
+# (the working branch) only ever produced a failing "deploy" check that blocked
+# PRs.  Day-to-day work lands on `master`; merging `master` into `main` releases.
 on:
   push:
-    branches: [main, master]
+    branches: [main]
     paths:
       - 'Badminton-Management/**'
   workflow_dispatch:
