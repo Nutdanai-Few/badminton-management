@@ -275,7 +275,9 @@ function renderPlayers() {
         const chip = document.createElement('div');
         chip.className = 'player-chip';
         chip.style.animationDelay = (idx * 30) + 'ms';
+        const initial = (name.trim()[0] || '?').toUpperCase();
         chip.innerHTML = `
+            <span class="chip-avatar" aria-hidden="true">${initial}</span>
             <span class="chip-name">${name}</span>
             <button class="chip-remove" aria-label="ลบ ${name}" data-idx="${idx}">
                 ${ICONS.x}
@@ -968,6 +970,24 @@ function generateSchedule() {
     });
 }
 
+// Mid-game re-pairing: keep the matches already PLAYED (scored), drop the unplayed
+// ones, and keep pairing the CURRENT roster until everyone has played the same number
+// of games (the normal fairness rule).  Works whether a player LEFT (remove them first
+// — they keep only the games they played) or JOINED late (add them first — they start
+// behind and are paired until they catch up).  continueSchedule continues each player's
+// games-played (no reset), so whoever is ahead simply rests while the rest catch up.
+function continueScheduleMidGame() {
+    const played = state.matches.filter(m => m.scoreA != null && m.scoreB != null);
+    const newMatches = continueSchedule({
+        players: state.players,
+        mode: state.settings.mode,
+        courts: state.settings.courts,
+        playedMatches: played,
+        getPlayers: getMatchPlayers
+    });
+    return [...played, ...newMatches];
+}
+
 // ===== Tab Navigation =====
 function switchTab(tabName) {
     // Update buttons
@@ -1071,6 +1091,49 @@ function addPlayerByName(rawName) {
     }
     recordKnownName(name);
     return true;
+}
+
+// Add one or many players from a raw string. Splits on commas / newlines / etc.
+// so a single submit (or a paste) can add a whole list. De-dups against the
+// current roster (case-insensitive) and within the input itself. Returns
+// {added, skipped} so the caller can show feedback.
+function addPlayers(rawInput) {
+    const names = KnownNames.splitNames(rawInput);
+    if (!names.length) return { added: 0, skipped: 0 };
+    const seen = new Set(state.players.map(p => p.toLowerCase()));
+    let added = 0, skipped = 0;
+    names.forEach(name => {
+        recordKnownName(name);                 // remember every typed name
+        const key = name.toLowerCase();
+        if (seen.has(key)) { skipped++; return; }
+        seen.add(key);
+        state.players.push(name);
+        added++;
+    });
+    if (added) {
+        saveState();
+        renderPlayers();
+        updateClearButtons();
+    }
+    return { added, skipped };
+}
+
+// Transient confirmation shown in the hint line under the input, then reverts.
+const ADD_HINT_DEFAULT = 'พิมพ์คั่นด้วย , หรือวางหลายชื่อพร้อมกันเพื่อเพิ่มทีละหลายคน';
+let addFeedbackTimer = null;
+function showAddFeedback(added, skipped) {
+    const el = document.getElementById('add-feedback');
+    if (!el) return;
+    const parts = [];
+    if (added)   parts.push(`เพิ่มแล้ว ${added} ชื่อ`);
+    if (skipped) parts.push(`ข้ามชื่อซ้ำ ${skipped}`);
+    el.textContent = parts.join(' · ') || ADD_HINT_DEFAULT;
+    el.classList.add('feedback-active');
+    clearTimeout(addFeedbackTimer);
+    addFeedbackTimer = setTimeout(() => {
+        el.textContent = ADD_HINT_DEFAULT;
+        el.classList.remove('feedback-active');
+    }, 2600);
 }
 
 const suggestionsBox = document.getElementById('name-suggestions');
@@ -1202,13 +1265,29 @@ document.addEventListener('click', e => {
     if (!e.target.closest('.player-input-wrap')) closeSuggestions();
 });
 
-// ===== Event: Add Player =====
+// ===== Event: Add Player(s) =====
 document.getElementById('add-player-form').addEventListener('submit', e => {
     e.preventDefault();
-    if (addPlayerByName(playerNameInput.value)) {
+    const { added, skipped } = addPlayers(playerNameInput.value);
+    if (added || skipped) {
         playerNameInput.value = '';
         closeSuggestions();
-        playerNameInput.focus();
+        showAddFeedback(added, skipped);
+    }
+    playerNameInput.focus();
+});
+
+// Pasting a multi-name list (commas / newlines) adds them all at once instead
+// of dropping a messy blob into the single-line input. A single name pastes
+// normally so the autocomplete still works.
+playerNameInput.addEventListener('paste', e => {
+    const text = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+    if (KnownNames.splitNames(text).length > 1) {
+        e.preventDefault();
+        const { added, skipped } = addPlayers(text);
+        playerNameInput.value = '';
+        closeSuggestions();
+        showAddFeedback(added, skipped);
     }
 });
 
@@ -1239,6 +1318,56 @@ document.getElementById('reshuffle-btn').addEventListener('click', () => {
     updateClearButtons();
     switchTab('schedule');
 });
+
+// ===== Event: Continue mid-game (re-pair after someone leaves) =====
+// Keeps played results, drops unplayed matches, and pairs the current roster to even
+// out play counts.  Adjust the roster FIRST (remove who left / add who arrived), then
+// press this.  Shared by the button on the schedule tab and the one on the settings
+// tab (next to "จัดตารางใหม่"), so it's reachable right where the roster is edited.
+function handleContinueMidGame() {
+    const played = state.matches.filter(m => m.scoreA != null && m.scoreB != null);
+    if (played.length === 0) {
+        // Nothing played yet — this would just rebuild the whole schedule, which the
+        // "จัดตารางใหม่"/"สุ่มคู่ใหม่" buttons already do.
+        alert('ยังไม่มีคู่ที่เล่นจบ (กรอกผลแล้ว) — ใช้ปุ่ม "จัดตารางใหม่" เพื่อจับคู่ใหม่ทั้งหมด');
+        return;
+    }
+    const unplayed = state.matches.length - played.length;
+    if (!confirm(
+        `จับคู่ต่อกลางคัน?\n\n` +
+        `• เก็บ ${played.length} คู่ที่เล่นจบแล้วไว้\n` +
+        `• ตัด ${unplayed} คู่ที่ยังไม่ได้เล่นทิ้ง\n` +
+        `• จับคู่ผู้เล่นปัจจุบัน (${state.players.length} คน) ต่อไปเรื่อยๆ จนทุกคนแข่งเท่ากัน`
+    )) return;
+
+    const next = continueScheduleMidGame();
+    const added = next.length - played.length;
+    state.matches = next;
+    saveState();
+    renderMatches();
+    renderScoreboard();
+    updateGenerateButton();
+    updateTabBadge();
+    updateClearButtons();
+    switchTab('schedule');
+
+    if (added === 0) {
+        // continueSchedule added nothing: either everyone is already level, or the
+        // imbalance can't be evened out (every round seats the whole roster — nobody
+        // can rest, e.g. player count is an exact multiple of the court capacity).
+        const counts = computeScoreboard();
+        const played = state.players.map(p => (counts[p] ? counts[p].played : 0));
+        const equal = played.length > 0 && Math.min(...played) === Math.max(...played);
+        alert(equal
+            ? 'ผู้เล่นปัจจุบันแข่งเท่ากันอยู่แล้ว จึงไม่มีคู่เพิ่ม'
+            : 'จับคู่ให้แข่งเท่ากันไม่ได้ด้วยจำนวนผู้เล่น/สนามนี้ ' +
+              '(ทุกคนต้องลงเล่นทุกตา จึงไม่มีใครได้พักให้คนอื่นไล่ทัน) — ' +
+              'ลองเพิ่ม/ลดผู้เล่น หรือลดจำนวนสนาม');
+    }
+}
+
+document.getElementById('continue-btn').addEventListener('click', handleContinueMidGame);
+document.getElementById('continue-settings-btn').addEventListener('click', handleContinueMidGame);
 
 // ===== Clear Actions =====
 document.getElementById('clear-players-btn').addEventListener('click', () => {
@@ -1292,6 +1421,16 @@ function updateClearButtons() {
         state.matches.length > 0 ? '' : 'none';
     document.getElementById('reshuffle-btn').style.display =
         state.matches.length > 0 ? '' : 'none';
+    // Mid-game re-pair only makes sense once at least one match has been played.
+    // Surfaced both on the schedule tab and on the settings tab (where the roster is
+    // edited), so it's reachable right after adding/removing a player.
+    const hasPlayed = state.matches.some(m => m.scoreA != null && m.scoreB != null);
+    document.getElementById('continue-btn').style.display =
+        hasPlayed ? '' : 'none';
+    document.getElementById('continue-settings-btn').style.display =
+        hasPlayed ? '' : 'none';
+    document.getElementById('continue-hint').style.display =
+        hasPlayed ? '' : 'none';
 
     const hasScores = Object.keys(state.scores).some(k => state.scores[k].played > 0);
     document.getElementById('clear-scores-btn').style.display =

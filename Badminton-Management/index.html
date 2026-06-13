@@ -86,6 +86,9 @@
                     </div>
                     <form id="add-player-form" class="player-input-row">
                         <div class="player-input-wrap">
+                            <span class="player-input-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                            </span>
                             <input class="player-input" type="text" id="player-name"
                                    placeholder="พิมพ์ชื่อผู้เล่น หรือทีม" required
                                    autocomplete="off" role="combobox" aria-expanded="false"
@@ -96,8 +99,12 @@
                             </button>
                             <div class="name-suggestions" id="name-suggestions" role="listbox"></div>
                         </div>
-                        <button class="btn-add" type="submit">+ เพิ่ม</button>
+                        <button class="btn-add" type="submit">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                            <span>เพิ่ม</span>
+                        </button>
                     </form>
+                    <p class="player-input-hint" id="add-feedback" aria-live="polite">พิมพ์คั่นด้วย , หรือวางหลายชื่อพร้อมกันเพื่อเพิ่มทีละหลายคน</p>
                     <div id="players-list" class="player-chips"></div>
                 </section>
 
@@ -129,6 +136,12 @@
                     <button id="generate-btn" class="btn-generate" disabled>
                         เพิ่มผู้เล่นอย่างน้อย 2 คน
                     </button>
+                    <button id="continue-settings-btn" class="btn-generate btn-generate-secondary" style="display:none;">
+                        ↻ จับคู่ต่อ (กลางคัน)
+                    </button>
+                    <p class="continue-hint" id="continue-hint" style="display:none;">
+                        เก็บผลที่เล่นจบแล้ว · จับคู่ผู้เล่นปัจจุบันต่อให้แข่งเท่ากัน
+                    </p>
                 </section>
 
                 <!-- Clear All -->
@@ -144,6 +157,7 @@
                         <span class="section-label">ตารางการแข่งขัน</span>
                         <div class="section-header-right">
                             <span class="section-badge" id="match-count-badge" style="display:none;">0 คู่</span>
+                            <button class="btn-reshuffle" id="continue-btn" style="display:none;">↻ จับคู่ต่อ (กลางคัน)</button>
                             <button class="btn-reshuffle" id="reshuffle-btn" style="display:none;">↺ สุ่มคู่ใหม่</button>
                             <button class="btn-clear" id="clear-schedule-btn" style="display:none;">ล้างตาราง</button>
                         </div>

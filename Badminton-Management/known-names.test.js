@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-    normalizeName, addKnownName, removeKnownName, mergeKnownNames, filterKnownNames
+    normalizeName, addKnownName, removeKnownName, mergeKnownNames, filterKnownNames, splitNames
 } = require('./known-names.js');
 
 // --- normalizeName ---
@@ -114,4 +114,33 @@ test('filterKnownNames handles a whitespace-only query as empty', () => {
 
 test('filterKnownNames tolerates a null list', () => {
     assert.deepEqual(filterKnownNames(null, 'a'), []);
+});
+
+// --- splitNames ---
+
+test('splitNames returns a single trimmed name for plain input', () => {
+    assert.deepEqual(splitNames('  Aof  '), ['Aof']);
+});
+
+test('splitNames splits on commas (ASCII, Thai, ideographic) and semicolons', () => {
+    assert.deepEqual(splitNames('Aof, Bank，Boom、Bee;Cat'), ['Aof', 'Bank', 'Boom', 'Bee', 'Cat']);
+});
+
+test('splitNames splits on newlines and tabs (pasted lists)', () => {
+    assert.deepEqual(splitNames('Aof\nBank\r\nBoom\tBee'), ['Aof', 'Bank', 'Boom', 'Bee']);
+});
+
+test('splitNames keeps spaces inside a name (does not split on space)', () => {
+    assert.deepEqual(splitNames('John Doe, Mary Jane'), ['John Doe', 'Mary Jane']);
+});
+
+test('splitNames drops empty pieces from trailing/repeated separators', () => {
+    assert.deepEqual(splitNames('A,,B,   ,\n\nC,'), ['A', 'B', 'C']);
+});
+
+test('splitNames returns an empty array for empty/whitespace/non-string input', () => {
+    assert.deepEqual(splitNames(''), []);
+    assert.deepEqual(splitNames('   \n , ; '), []);
+    assert.deepEqual(splitNames(null), []);
+    assert.deepEqual(splitNames(42), []);
 });

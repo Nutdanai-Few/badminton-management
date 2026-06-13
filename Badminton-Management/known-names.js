@@ -71,10 +71,23 @@ function filterKnownNames(list, query, exclude = [], limit = Infinity) {
     return out;
 }
 
+// Split a raw string into individual names so organizers can add many at once —
+// by typing a comma-separated list or pasting names copied from a chat/notes.
+// Separators: comma (ASCII , Thai ， ideographic 、), semicolon, newline, tab.
+// Spaces are NOT separators (names legitimately contain them). Each piece is
+// trimmed; empties are dropped. Returns a NEW array (possibly empty).
+function splitNames(raw) {
+    if (typeof raw !== 'string') return [];
+    return raw
+        .split(/[\n\r,;\t、，]+/)
+        .map(normalizeName)
+        .filter(Boolean);
+}
+
 // Dual export: CommonJS for tests, window global for the browser.
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { normalizeName, addKnownName, removeKnownName, mergeKnownNames, filterKnownNames };
+    module.exports = { normalizeName, addKnownName, removeKnownName, mergeKnownNames, filterKnownNames, splitNames };
 }
 if (typeof window !== 'undefined') {
-    window.KnownNames = { normalizeName, addKnownName, removeKnownName, mergeKnownNames, filterKnownNames };
+    window.KnownNames = { normalizeName, addKnownName, removeKnownName, mergeKnownNames, filterKnownNames, splitNames };
 }
