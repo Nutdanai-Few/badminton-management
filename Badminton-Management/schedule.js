@@ -107,7 +107,23 @@
             // Stops once everyone has played the same number of times (>=1).
             const playCount = {};
             const lastPlayed = {};   // round # a player last played in (0 = not yet)
-            players.forEach(p => { playCount[p] = 0; lastPlayed[p] = 0; });
+            // partnerCount[a][b] = how many times a & b have ALREADY been partners.
+            // Used to prefer brand-new partnerships; a repeat is only chosen when no
+            // unused pairing of the four court players exists (i.e. they have already
+            // partnered everyone available to them).
+            const partnerCount = {};
+            players.forEach(p => { playCount[p] = 0; lastPlayed[p] = 0; partnerCount[p] = {}; });
+            const partnered = (a, b) => partnerCount[a][b] || 0;
+            const addPartner = (a, b) => {
+                partnerCount[a][b] = partnered(a, b) + 1;
+                partnerCount[b][a] = partnered(b, a) + 1;
+            };
+            // The 3 ways to split four players (indices 0-3) into two partnerships.
+            const SPLITS = [
+                [[0, 1], [2, 3]],
+                [[0, 2], [1, 3]],
+                [[0, 3], [1, 2]],
+            ];
             const selected = [];
 
             for (let r = 1; r <= 1000; r++) {
@@ -126,13 +142,27 @@
                     const available = sorted.filter(p => !usedThisRound.has(p));
                     if (available.length < 4) break;
                     const picked = available.slice(0, 4);
-                    const s = shuffle(picked, rand);
+                    // Of the three ways to split these four into two teams, choose the
+                    // one with the fewest already-used partnerships.  Shuffle the
+                    // split order first so equally-good (e.g. all-new) pairings break
+                    // ties randomly instead of always producing the same teams.
+                    let best = null, bestCost = Infinity;
+                    for (const [[i, j], [k, l]] of shuffle(SPLITS, rand)) {
+                        const cost = partnered(picked[i], picked[j]) + partnered(picked[k], picked[l]);
+                        if (cost < bestCost) {
+                            bestCost = cost;
+                            best = [[i, j], [k, l]];
+                        }
+                    }
+                    const [[i, j], [k, l]] = best;
                     selected.push({
-                        teams: [s[0] + ' / ' + s[1], s[2] + ' / ' + s[3]],
+                        teams: [picked[i] + ' / ' + picked[j], picked[k] + ' / ' + picked[l]],
                         scoreA: null,
                         scoreB: null,
                         round: r
                     });
+                    addPartner(picked[i], picked[j]);
+                    addPartner(picked[k], picked[l]);
                     picked.forEach(p => {
                         usedThisRound.add(p);
                         playCount[p]++;

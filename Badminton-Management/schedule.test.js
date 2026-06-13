@@ -98,6 +98,77 @@ test('doubles: each round fills as many courts as players allow', () => {
     }
 });
 
+// ===== doubles: partner diversity (new partners before repeats) =====
+
+// Count, for a doubles schedule, how many times each unordered partnership occurs.
+function partnerCounts(matches) {
+    const c = {};
+    matches.forEach(m => {
+        m.teams.forEach(t => {
+            const [a, b] = t.split(' / ').map(s => s.trim()).sort();
+            const key = a + '|' + b;
+            c[key] = (c[key] || 0) + 1;
+        });
+    });
+    return c;
+}
+
+// Replay the schedule match-by-match and assert the chosen split of the four
+// court players always has the minimum possible already-used-partner cost.  This
+// is the exact guarantee: a fresh pairing is always preferred, and a repeat is
+// only ever produced when NO unused split of those four players exists (i.e. they
+// have already partnered everyone available to them that round).
+function assertMinPartnerCost(matches, label) {
+    const pc = {};
+    const seen = (a, b) => (pc[a + '|' + b] || 0);
+    const add = (a, b) => { pc[a + '|' + b] = seen(a, b) + 1; pc[b + '|' + a] = seen(b, a) + 1; };
+    for (const m of matches) {
+        const [a, b] = m.teams[0].split(' / ').map(s => s.trim());
+        const [c, d] = m.teams[1].split(' / ').map(s => s.trim());
+        // Cost of the split actually chosen, vs the best of all three splits.
+        const chosen = seen(a, b) + seen(c, d);
+        const splits = [
+            seen(a, b) + seen(c, d),
+            seen(a, c) + seen(b, d),
+            seen(a, d) + seen(b, c),
+        ];
+        const best = Math.min(...splits);
+        assert.equal(chosen, best,
+            `${label}: round ${m.round} chose a ${chosen}-repeat split when a ${best}-repeat split existed`);
+        add(a, b);
+        add(c, d);
+    }
+}
+
+test('doubles: always pairs to minimise repeats (fresh partners preferred, repeat only when forced)', () => {
+    // 5 players, 1 court -> 5 rounds, everyone plays 4 times: enough partnerships to
+    // force the question of repeats.  Across many seeds the chosen pairing must
+    // always be a minimum-repeat split.
+    for (const seed of [1, 2, 3, 7, 13, 42, 99, 123, 256, 1000]) {
+        const players = names(5);
+        const matches = makeSchedule({ players, mode: 'doubles', courts: 1, rand: seededRand(seed) });
+        assertMinPartnerCost(matches, `seed ${seed}`);
+    }
+});
+
+test('doubles: minimise-repeat holds with multiple courts too', () => {
+    for (const seed of [4, 8, 16, 32]) {
+        const players = names(7); // 1 court fits, the 8th-ish rotates; long enough run
+        const matches = makeSchedule({ players, mode: 'doubles', courts: 1, rand: seededRand(seed) });
+        assertMinPartnerCost(matches, `seed ${seed}`);
+    }
+    const players = names(12);
+    const matches = makeSchedule({ players, mode: 'doubles', courts: 2, rand: seededRand(77) });
+    assertMinPartnerCost(matches, 'multi-court');
+});
+
+test('doubles: when each plays once there are no repeats at all', () => {
+    const players = names(8);
+    const matches = makeSchedule({ players, mode: 'doubles', courts: 2, rand: seededRand(5) });
+    const counts = partnerCounts(matches);
+    assert.ok(Object.values(counts).every(n => n === 1), 'each plays once -> no repeats');
+});
+
 // ===== doubles: the rest-rotation feature =====
 
 test('doubles: when enough players, the four who just played all rest next round', () => {
