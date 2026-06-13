@@ -275,7 +275,9 @@ function renderPlayers() {
         const chip = document.createElement('div');
         chip.className = 'player-chip';
         chip.style.animationDelay = (idx * 30) + 'ms';
+        const initial = (name.trim()[0] || '?').toUpperCase();
         chip.innerHTML = `
+            <span class="chip-avatar" aria-hidden="true">${initial}</span>
             <span class="chip-name">${name}</span>
             <button class="chip-remove" aria-label="ลบ ${name}" data-idx="${idx}">
                 ${ICONS.x}
@@ -1073,6 +1075,49 @@ function addPlayerByName(rawName) {
     return true;
 }
 
+// Add one or many players from a raw string. Splits on commas / newlines / etc.
+// so a single submit (or a paste) can add a whole list. De-dups against the
+// current roster (case-insensitive) and within the input itself. Returns
+// {added, skipped} so the caller can show feedback.
+function addPlayers(rawInput) {
+    const names = KnownNames.splitNames(rawInput);
+    if (!names.length) return { added: 0, skipped: 0 };
+    const seen = new Set(state.players.map(p => p.toLowerCase()));
+    let added = 0, skipped = 0;
+    names.forEach(name => {
+        recordKnownName(name);                 // remember every typed name
+        const key = name.toLowerCase();
+        if (seen.has(key)) { skipped++; return; }
+        seen.add(key);
+        state.players.push(name);
+        added++;
+    });
+    if (added) {
+        saveState();
+        renderPlayers();
+        updateClearButtons();
+    }
+    return { added, skipped };
+}
+
+// Transient confirmation shown in the hint line under the input, then reverts.
+const ADD_HINT_DEFAULT = 'พิมพ์คั่นด้วย , หรือวางหลายชื่อพร้อมกันเพื่อเพิ่มทีละหลายคน';
+let addFeedbackTimer = null;
+function showAddFeedback(added, skipped) {
+    const el = document.getElementById('add-feedback');
+    if (!el) return;
+    const parts = [];
+    if (added)   parts.push(`เพิ่มแล้ว ${added} ชื่อ`);
+    if (skipped) parts.push(`ข้ามชื่อซ้ำ ${skipped}`);
+    el.textContent = parts.join(' · ') || ADD_HINT_DEFAULT;
+    el.classList.add('feedback-active');
+    clearTimeout(addFeedbackTimer);
+    addFeedbackTimer = setTimeout(() => {
+        el.textContent = ADD_HINT_DEFAULT;
+        el.classList.remove('feedback-active');
+    }, 2600);
+}
+
 const suggestionsBox = document.getElementById('name-suggestions');
 const playerNameInput = document.getElementById('player-name');
 const rosterToggle = document.getElementById('roster-toggle');
@@ -1202,13 +1247,29 @@ document.addEventListener('click', e => {
     if (!e.target.closest('.player-input-wrap')) closeSuggestions();
 });
 
-// ===== Event: Add Player =====
+// ===== Event: Add Player(s) =====
 document.getElementById('add-player-form').addEventListener('submit', e => {
     e.preventDefault();
-    if (addPlayerByName(playerNameInput.value)) {
+    const { added, skipped } = addPlayers(playerNameInput.value);
+    if (added || skipped) {
         playerNameInput.value = '';
         closeSuggestions();
-        playerNameInput.focus();
+        showAddFeedback(added, skipped);
+    }
+    playerNameInput.focus();
+});
+
+// Pasting a multi-name list (commas / newlines) adds them all at once instead
+// of dropping a messy blob into the single-line input. A single name pastes
+// normally so the autocomplete still works.
+playerNameInput.addEventListener('paste', e => {
+    const text = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+    if (KnownNames.splitNames(text).length > 1) {
+        e.preventDefault();
+        const { added, skipped } = addPlayers(text);
+        playerNameInput.value = '';
+        closeSuggestions();
+        showAddFeedback(added, skipped);
     }
 });
 
