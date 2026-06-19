@@ -74,6 +74,67 @@
         return String(match.teams[teamIdx]).split(' / ').map(s => s.trim());
     }
 
+    // ===== Gender pairing constraint =====
+    // A doubles match must never be an all-male team vs an all-female team
+    // (ช-ช vs ญ-ญ).  Mixed teams are always fine, and an all-male match or an
+    // all-female match is fine too — only the pure male-vs-female matchup is banned.
+    // `genderOf(name)` returns 'male' | 'female' | null/undefined.
+
+    // A team's gender is 'male'/'female' ONLY if every member is that gender; any
+    // unknown or mixed member makes it 'mixed'.  Treating unknowns as 'mixed' fails
+    // safe: incomplete gender data can never trigger the ban.
+    function teamGender(members, genderOf) {
+        let male = 0, female = 0;
+        for (const m of members) {
+            const g = genderOf(m);
+            if (g === 'male') male++;
+            else if (g === 'female') female++;
+        }
+        if (male === members.length) return 'male';
+        if (female === members.length) return 'female';
+        return 'mixed';
+    }
+
+    // True iff pairing teamA against teamB is the forbidden ช-ช vs ญ-ญ matchup.
+    function forbiddenMatch(teamA, teamB, genderOf) {
+        const ga = teamGender(teamA, genderOf);
+        const gb = teamGender(teamB, genderOf);
+        return (ga === 'male' && gb === 'female') || (ga === 'female' && gb === 'male');
+    }
+
+    // Penalty added to a forbidden split's cost.  Far larger than any achievable
+    // partner-repeat cost, so a legal split always wins; a forbidden split is only
+    // ever chosen when NO legal split of the four exists (which, given any group of
+    // four always has one, never happens — it just keeps the selection total).
+    const GENDER_PENALTY = 1e9;
+
+    // ===== Rank balance =====
+    // Make each doubles match as even as possible: of the three ways to split the four
+    // court players into two teams, prefer the one whose teams are closest in total
+    // strength (the "strong-with-weak" convention).  Rank only ever influences the
+    // SPLIT — never WHICH four players take a court — so equal-games fairness is
+    // untouched, exactly like the gender rule.
+    const RANK_VALUE = { beginner: 1, intermediate: 2, advanced: 3, pro: 4 };
+
+    // |strengthA - strengthB| for a candidate split.  Rank is OPTIONAL, so if ANY of
+    // the four players is unranked the cost is 0 for every split — balance simply has
+    // no say for that court and partner-variety decides, exactly as before rank existed
+    // (fail-safe, mirroring teamGender treating unknown gender as 'mixed').
+    function rankBalanceCost(teamA, teamB, rankOf) {
+        const strength = m => RANK_VALUE[rankOf(m)];
+        for (const m of [...teamA, ...teamB]) {
+            if (strength(m) === undefined) return 0;
+        }
+        const sum = team => team.reduce((s, m) => s + strength(m), 0);
+        return Math.abs(sum(teamA) - sum(teamB));
+    }
+
+    // Multiplier on the strength gap.  Keeps the cost ladder gender ≫ balance ≫
+    // partner-variety: the largest realistic gap (6) costs 6000, far below
+    // GENDER_PENALTY, while realistic partner-repeat counts stay below 1000, so balance
+    // outranks partner-variety but among equally balanced splits fresh partners decide.
+    const BALANCE_WEIGHT = 1e3;
+
     // Build a full schedule for the given participants.
     //   players      — array of participant names
     //   mode         — 'doubles' | 'singles'
@@ -81,8 +142,12 @@
     //   prevMatches  — the schedule being replaced (used only as a soft tiebreaker
     //                  so players who played a lot last time are deprioritised)
     //   getPlayers   — (match, teamIdx) => string[]; parses a match's team members
+    //   genderOf     — (name) => 'male'|'female'|null; enforces the no-(ช-ช vs ญ-ญ)
+    //                  rule in doubles (defaults to all-unknown = no constraint)
+    //   rankOf       — (name) => 'beginner'|'intermediate'|'advanced'|'pro'|null;
+    //                  balances team strength in doubles (defaults to all-unknown = off)
     //   rand         — injectable RNG (defaults to Math.random)
-    function makeSchedule({ players, mode, courts, prevMatches = [], getPlayers = defaultGetPlayers, rand = Math.random }) {
+    function makeSchedule({ players, mode, courts, prevMatches = [], getPlayers = defaultGetPlayers, genderOf = () => null, rankOf = () => null, rand = Math.random }) {
         // Count individual appearances in the PREVIOUS schedule.  Used as the
         // lowest-priority tiebreaker so players who played more last time wait.
         const prevPlays = {};
@@ -148,7 +213,12 @@
                     // ties randomly instead of always producing the same teams.
                     let best = null, bestCost = Infinity;
                     for (const [[i, j], [k, l]] of shuffle(SPLITS, rand)) {
-                        const cost = partnered(picked[i], picked[j]) + partnered(picked[k], picked[l]);
+                        const teamA = [picked[i], picked[j]];
+                        const teamB = [picked[k], picked[l]];
+                        const penalty = forbiddenMatch(teamA, teamB, genderOf) ? GENDER_PENALTY : 0;
+                        const cost = penalty
+                            + BALANCE_WEIGHT * rankBalanceCost(teamA, teamB, rankOf)
+                            + partnered(picked[i], picked[j]) + partnered(picked[k], picked[l]);
                         if (cost < bestCost) {
                             bestCost = cost;
                             best = [[i, j], [k, l]];
@@ -236,19 +306,28 @@
     // the new matches to append.  Players not in `players` (i.e. removed) are never
     // paired again — their already-played games and stats stand as-is.
     //
-    // Fairness rule = the SAME as a normal schedule: keep pairing (fewest-played
-    // first, full courts) until every CURRENT player has played the same number of
-    // games, then stop.  Each player's games-played carries over (no reset), so a
-    // player who is ahead simply RESTS while the others catch up to them — nobody is
-    // dragged into extra games past the equal level.  A latecomer starts behind and
-    // is paired more often until they reach everyone else's level.
+    // Catch-up rule (court-usage first): keep pairing the CURRENT roster until the
+    // most-behind player has caught up to the games played by whoever was furthest ahead
+    // when play paused, then stop.  Each player's games-played carries over (no reset).
+    // A latecomer (or anyone who fell behind after a withdrawal) is paired until they
+    // reach the old leader's level.
+    //
+    // Every round fills ALL configured courts — the most-rested play first, so when there
+    // are more players than seats whoever is ahead is the one who rests.  A court is left
+    // empty ONLY when there are literally too few players to seat four; it is NEVER left
+    // idle merely to keep play counts exactly equal.  Filling every court is preferred even
+    // if it leaves some players more than one game ahead: when the roster exactly fills the
+    // courts (e.g. 8 players / 2 courts) nobody can rest, so the only way to use every court
+    // is to let the gap sit at one game rather than leaving a court empty.
     //   players        — current roster (withdrawn players already removed / latecomers added)
     //   mode           — 'doubles' | 'singles'
     //   courts         — courts available per round
     //   playedMatches  — the matches already played (kept by the caller)
     //   getPlayers     — (match, teamIdx) => string[]; honours the legacy triple team
+    //   genderOf       — (name) => 'male'|'female'|null; same no-(ช-ช vs ญ-ญ) rule
+    //   rankOf         — (name) => rank id|null; same team-strength balancing
     //   rand           — injectable RNG
-    function continueSchedule({ players, mode, courts, playedMatches = [], getPlayers = defaultGetPlayers, rand = Math.random }) {
+    function continueSchedule({ players, mode, courts, playedMatches = [], getPlayers = defaultGetPlayers, genderOf = () => null, rankOf = () => null, rand = Math.random }) {
         const seatsPerCourt = mode === 'doubles' ? 4 : 2;
 
         // Games already played by each CURRENT player (withdrawn players are ignored
@@ -266,17 +345,11 @@
         // Nobody has played yet -> there is nothing to "continue" from, so build a full
         // fresh schedule.  (Also makes this function correct when called standalone.)
         if (!players.length || Math.max(...players.map(p => playCount[p])) === 0) {
-            return makeSchedule({ players, mode, courts, prevMatches: playedMatches, getPlayers, rand });
+            return makeSchedule({ players, mode, courts, prevMatches: playedMatches, getPlayers, genderOf, rankOf, rand });
         }
 
         // Too few players left to fill even one court.
         if (players.length < seatsPerCourt) return [];
-
-        // If every round would seat the entire roster (courts big enough for everyone),
-        // nobody can ever rest, so an imbalance left by a departed/late player can never
-        // be evened out by adding rounds.  Don't loop forever — return nothing.
-        const seatsPerRound = seatsPerCourt * Math.min(courts, Math.floor(players.length / seatsPerCourt));
-        if (seatsPerRound >= players.length) return [];
 
         // Carry partner history over from the played matches so fresh partnerships are
         // still preferred across the whole session (doubles only).
@@ -308,19 +381,20 @@
         players.forEach(p => { lastPlayed[p] = 0; });
         const selected = [];
 
-        const spread = () => {
-            const c = players.map(p => playCount[p]);
-            return Math.max(...c) - Math.min(...c);
-        };
+        // Catch-up target: the games played by whoever was furthest ahead when play paused.
+        // We pair the behind players until the most-behind one reaches this level.
+        const initialMax = Math.max(...players.map(p => playCount[p]));
+        const minPlayed = () => Math.min(...players.map(p => playCount[p]));
 
-        // Normal scheduling, just seeded with the games already played: each round
-        // seats the fewest-played players (full courts), so whoever is ahead rests
-        // until the rest catch up.  Stop the instant everyone is level (spread 0).
-        // `seatsPerRound < players.length` (guaranteed above) means there is always
-        // someone able to rest, so the gap shrinks every round and this terminates.
-        // The +1000 ceiling is only a safety backstop.
+        // Each round fills ALL configured courts with the most-rested players first, so when
+        // there are more players than seats whoever is ahead is the one who rests.  Stop once
+        // the most-behind player has reached the leader's level.  A court is only ever left
+        // empty when there are too few players to seat four — never to keep counts exactly
+        // equal: filling every court wins even if it leaves someone a game ahead.  At least
+        // four of the most-behind players advance every round until they catch up, so this
+        // terminates; the +1000 ceiling is only a backstop.
         for (let r = maxRound + 1; r <= maxRound + 1000; r++) {
-            if (spread() === 0) break;
+            if (minPlayed() >= initialMax) break;
 
             const sorted = shuffle(players, rand)
                 .sort((a, b) =>
@@ -338,7 +412,12 @@
                 if (mode === 'doubles') {
                     let best = null, bestCost = Infinity;
                     for (const [[i, j], [k, l]] of shuffle(SPLITS, rand)) {
-                        const cost = partnered(picked[i], picked[j]) + partnered(picked[k], picked[l]);
+                        const teamA = [picked[i], picked[j]];
+                        const teamB = [picked[k], picked[l]];
+                        const penalty = forbiddenMatch(teamA, teamB, genderOf) ? GENDER_PENALTY : 0;
+                        const cost = penalty
+                            + BALANCE_WEIGHT * rankBalanceCost(teamA, teamB, rankOf)
+                            + partnered(picked[i], picked[j]) + partnered(picked[k], picked[l]);
                         if (cost < bestCost) { bestCost = cost; best = [[i, j], [k, l]]; }
                     }
                     const [[i, j], [k, l]] = best;
@@ -364,5 +443,5 @@
         return selected;
     }
 
-    return { shuffle, roundRobin, makeSchedule, continueSchedule };
+    return { shuffle, roundRobin, makeSchedule, continueSchedule, teamGender, forbiddenMatch, rankBalanceCost };
 });

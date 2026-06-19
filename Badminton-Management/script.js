@@ -19,7 +19,8 @@ let state = {
     settings: { mode: 'singles', courts: 1 },
     matches: [],
     scores: {},   // {playerName: {played, wins, losses}} — persists across schedule regeneration
-    history: {}
+    history: {},
+    playerMeta: {} // {playerName: {gender:'male'|'female'|null, rank:'beginner'|...|null}}
 };
 
 // ===== Firebase Real-time Sync =====
@@ -68,6 +69,7 @@ function writeLocalCache() {
             matches: state.matches,
             scores: state.scores,
             history: state.history,
+            playerMeta: state.playerMeta,
             updatedAt: localUpdatedAt
         }));
     } catch { /* storage disabled or full — Firebase remains the backstop */ }
@@ -97,6 +99,8 @@ function applySnapshot(data) {
         state.matches = data.matches || [];
         state.scores = data.scores || {};
         state.history = data.history || {};
+        // Sanitise + prune meta to the incoming roster (drops orphans/legacy gaps).
+        state.playerMeta = PlayerMeta.normalizePlayerMeta(data.playerMeta || {}, state.players);
     }
     // `data` is null only for a brand-new database that has never been written;
     // in that case we keep the empty default state.
@@ -125,6 +129,7 @@ function saveState({ allowEmpty = false } = {}) {
             matches: state.matches,
             scores: state.scores,
             history: state.history,
+            playerMeta: state.playerMeta,
             updatedAt: localUpdatedAt
         });
     }, 300);
@@ -140,6 +145,7 @@ function flushLocalToFirebase() {
         matches: state.matches,
         scores: state.scores,
         history: state.history,
+        playerMeta: state.playerMeta,
         updatedAt: localUpdatedAt
     });
 }
@@ -253,6 +259,24 @@ function emptyStateHTML(icon, title, hint) {
     `;
 }
 
+// ===== Player gender display labels =====
+const GENDER_SHORT = { male: 'ช', female: 'ญ' };
+const GENDER_LABEL = { male: 'ชาย', female: 'หญิง' };
+
+// Prefix a player name with a small gender dot (blue = male, pink = female).
+// The name itself stays the default colour so it's easy to read; unset gender →
+// plain name, no dot.
+function nameWithGender(name) {
+    const { gender } = PlayerMeta.getMeta(state.playerMeta, name);
+    if (!gender) return name;
+    return `<span class="gdot gdot--${gender}" title="${GENDER_LABEL[gender]}"></span>${name}`;
+}
+
+// Render a list of player names joined by " / ", each prefixed with a gender dot.
+function namesWithGender(names) {
+    return names.map(nameWithGender).join(' / ');
+}
+
 // ===== Render: Players =====
 function renderPlayers() {
     const container = document.getElementById('players-list');
@@ -260,6 +284,8 @@ function renderPlayers() {
     container.innerHTML = '';
 
     badge.textContent = state.players.length + ' คน';
+    document.getElementById('players-section')
+        .classList.toggle('roster-empty', state.players.length === 0);
 
     if (state.players.length === 0) {
         container.innerHTML = emptyStateHTML(
@@ -273,38 +299,150 @@ function renderPlayers() {
 
     state.players.forEach((name, idx) => {
         const chip = document.createElement('div');
-        chip.className = 'player-chip';
+        const { gender, rank } = PlayerMeta.getMeta(state.playerMeta, name);
+        chip.className = 'player-chip'
+            + (gender ? ` chip--${gender}` : ' chip--nogender');
         chip.style.animationDelay = (idx * 30) + 'ms';
         const initial = (name.trim()[0] || '?').toUpperCase();
+
+        // Gender: an inline one-tap toggle (required). Rank: a themed custom
+        // dropdown (optional) — a native <select>'s open list can't be styled to
+        // match the dark theme, so we render our own menu. The trigger shows the
+        // short label; the menu uses full labels (it has room).
+        const rankI = PlayerMeta.rankInfo(rank);
+        const rankMenu = `<button type="button" class="chip-rank-opt${!rank ? ' selected' : ''}" data-idx="${idx}" data-rank="">ไม่ระบุ</button>`
+            + PlayerMeta.RANKS.map(r =>
+                `<button type="button" class="chip-rank-opt${rank === r.id ? ' selected' : ''}" data-idx="${idx}" data-rank="${r.id}">${r.label}</button>`
+            ).join('');
+
         chip.innerHTML = `
             <span class="chip-avatar" aria-hidden="true">${initial}</span>
             <span class="chip-name">${name}</span>
-            <button class="chip-remove" aria-label="ลบ ${name}" data-idx="${idx}">
+            <div class="chip-gender-toggle" role="group" aria-label="เพศของ ${name}">
+                <button type="button" class="chip-gbtn" data-idx="${idx}" data-gender="male"
+                        aria-label="${GENDER_LABEL.male}" aria-pressed="${gender === 'male'}">${GENDER_SHORT.male}</button>
+                <button type="button" class="chip-gbtn" data-idx="${idx}" data-gender="female"
+                        aria-label="${GENDER_LABEL.female}" aria-pressed="${gender === 'female'}">${GENDER_SHORT.female}</button>
+            </div>
+            <div class="chip-rank${rank ? ' chip-rank--set' : ''}">
+                <button type="button" class="chip-rank-btn" data-idx="${idx}"
+                        aria-haspopup="true" aria-expanded="false" aria-label="ระดับมือของ ${name}">
+                    <span class="chip-rank-label">${rankI ? rankI.short : 'ระดับ'}</span>
+                    ${ICONS.chevronDown}
+                </button>
+                <div class="chip-rank-menu" role="menu">${rankMenu}</div>
+            </div>
+            <button type="button" class="chip-remove" data-idx="${idx}" aria-label="ลบ ${name}">
                 ${ICONS.x}
             </button>
         `;
         container.appendChild(chip);
     });
 
-    document.getElementById('player-name').focus();
     updateGenerateButton();
 }
 
-// Event delegation for player removal
+// Update one chip's gender visuals in place — no full re-render, so tapping a
+// gender button never re-runs the slide-in animation or pops the mobile keyboard.
+function refreshChipGender(chip, name) {
+    const { gender } = PlayerMeta.getMeta(state.playerMeta, name);
+    chip.classList.toggle('chip--male', gender === 'male');
+    chip.classList.toggle('chip--female', gender === 'female');
+    chip.classList.toggle('chip--nogender', !gender);
+    chip.querySelectorAll('.chip-gbtn').forEach(b =>
+        b.setAttribute('aria-pressed', String(b.dataset.gender === gender)));
+}
+
+// Event delegation: remove a player, or set their gender with one tap.
 document.getElementById('players-list').addEventListener('click', e => {
-    const btn = e.target.closest('.chip-remove');
-    if (!btn) return;
-    const idx = parseInt(btn.dataset.idx, 10);
-    const chip = btn.closest('.player-chip');
-    chip.classList.add('removing');
-    setTimeout(() => {
-        state.players.splice(idx, 1);
-        // Explicit removal — may empty the list, so allow an empty write.
-        saveState({ allowEmpty: true });
-        renderPlayers();
-        updateClearButtons();
-    }, 150);
+    const removeBtn = e.target.closest('.chip-remove');
+    if (removeBtn) {
+        const idx = parseInt(removeBtn.dataset.idx, 10);
+        const chip = removeBtn.closest('.player-chip');
+        chip.classList.add('removing');
+        setTimeout(() => {
+            const [removed] = state.players.splice(idx, 1);
+            // Drop the removed player's meta so the map never keeps orphans.
+            if (removed && state.playerMeta) delete state.playerMeta[removed];
+            // Explicit removal — may empty the list, so allow an empty write.
+            saveState({ allowEmpty: true });
+            renderPlayers();
+            updateClearButtons();
+        }, 150);
+        return;
+    }
+
+    const gbtn = e.target.closest('.chip-gbtn');
+    if (gbtn) {
+        const idx = parseInt(gbtn.dataset.idx, 10);
+        const name = state.players[idx];
+        state.playerMeta = PlayerMeta.setMeta(state.playerMeta, name, { gender: gbtn.dataset.gender });
+        saveState();
+        refreshChipGender(gbtn.closest('.player-chip'), name);
+        updateGenerateButton();
+        return;
+    }
+
+    // Rank dropdown: toggle the menu open, or pick an option.
+    const rankBtn = e.target.closest('.chip-rank-btn');
+    if (rankBtn) {
+        const wrap = rankBtn.closest('.chip-rank');
+        const willOpen = !wrap.classList.contains('open');
+        closeRankMenus();
+        wrap.classList.toggle('open', willOpen);
+        rankBtn.setAttribute('aria-expanded', String(willOpen));
+        return;
+    }
+
+    const rankOpt = e.target.closest('.chip-rank-opt');
+    if (rankOpt) {
+        const idx = parseInt(rankOpt.dataset.idx, 10);
+        const name = state.players[idx];
+        const rankId = rankOpt.dataset.rank || null;
+        state.playerMeta = PlayerMeta.setMeta(state.playerMeta, name, { rank: rankId });
+        saveState();
+
+        // Surgically update just this chip's dropdown — no full re-render.
+        const wrap = rankOpt.closest('.chip-rank');
+        const info = PlayerMeta.rankInfo(rankId);
+        wrap.querySelector('.chip-rank-label').textContent = info ? info.short : 'ระดับ';
+        wrap.classList.toggle('chip-rank--set', !!rankId);
+        wrap.querySelectorAll('.chip-rank-opt').forEach(o =>
+            o.classList.toggle('selected', (o.dataset.rank || '') === (rankId || '')));
+        closeRankMenus();
+    }
 });
+
+// Close any open rank dropdown(s), optionally keeping one.
+function closeRankMenus(except) {
+    document.querySelectorAll('.chip-rank.open').forEach(el => {
+        if (el === except) return;
+        el.classList.remove('open');
+        el.querySelector('.chip-rank-btn')?.setAttribute('aria-expanded', 'false');
+    });
+}
+
+// Click anywhere outside an open rank dropdown closes it.
+document.addEventListener('click', e => {
+    if (!e.target.closest('.chip-rank')) closeRankMenus();
+});
+
+// ===== Roster collapse (mobile) =====
+// On phones the name list gets long, so the title doubles as a tap-to-collapse
+// control (CSS makes it inert on desktop).  State persists in localStorage.
+const playersSection = document.getElementById('players-section');
+const rosterToggleBtn = document.getElementById('roster-collapse-btn');
+
+function setRosterCollapsed(collapsed) {
+    playersSection.classList.toggle('roster-collapsed', collapsed);
+    rosterToggleBtn.setAttribute('aria-expanded', String(!collapsed));
+    try { localStorage.setItem('bmRosterCollapsed', collapsed ? '1' : '0'); } catch { /* ignore */ }
+}
+
+rosterToggleBtn.addEventListener('click', () =>
+    setRosterCollapsed(!playersSection.classList.contains('roster-collapsed')));
+
+setRosterCollapsed(localStorage.getItem('bmRosterCollapsed') === '1');
 
 // ===== Render: Settings =====
 function renderSettings() {
@@ -355,12 +493,18 @@ function updateGenerateButton() {
     let canGenerate = participants.length >= 2;
     let message = '';
 
+    // Gender is required for every player before a schedule can be made.
+    const missingGender = PlayerMeta.playersMissingGender(state.playerMeta, state.players);
+
     if (isDoubles && state.players.length < 4) {
         canGenerate = false;
         message = 'เพิ่มผู้เล่นอย่างน้อย 4 คนสำหรับแข่งแบบคู่';
     } else if (!isDoubles && state.players.length < 2) {
         canGenerate = false;
         message = 'เพิ่มผู้เล่นอย่างน้อย 2 คน';
+    } else if (missingGender.length > 0) {
+        canGenerate = false;
+        message = `เลือกเพศให้ครบทุกคน (เหลือ ${missingGender.length} คน)`;
     }
 
     btn.disabled = !canGenerate;
@@ -406,8 +550,6 @@ function renderScoreboard() {
         return;
     }
 
-    const rankColors = ['var(--color-rank-1)', 'var(--color-rank-2)', 'var(--color-rank-3)'];
-
     const table = document.createElement('table');
     table.className = 'sb-table';
     table.innerHTML = `
@@ -424,18 +566,35 @@ function renderScoreboard() {
     `;
 
     const tbody = document.createElement('tbody');
+    const CROWN = `<svg class="sb-crown" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 8l4.5 3L12 5l4.5 6L21 8l-1.7 10.2a1 1 0 0 1-1 .8H5.7a1 1 0 0 1-1-.8L3 8z"/></svg>`;
 
     entries.forEach(([name, stats], i) => {
         const winRate = stats.played > 0
             ? Math.round(stats.wins / stats.played * 100) : 0;
-        const color = rankColors[i] || 'var(--color-text-muted)';
+        const rank = i + 1;
+        const isTop = i < 3;
+
+        // Gender-coloured avatar with the player's initial — mirrors the roster.
+        const { gender } = PlayerMeta.getMeta(state.playerMeta, name);
+        const initial = (name.trim()[0] || '?').toUpperCase();
+        const avatarClass = gender ? `sb-avatar--${gender}` : 'sb-avatar--none';
+
+        // Top 3 get a metallic medal (crown on #1); everyone else a plain dot.
+        const rankCell = isTop
+            ? `<span class="sb-medal sb-medal--${rank}">${rank === 1 ? CROWN : ''}<span class="sb-medal-num">${rank}</span></span>`
+            : `<span class="rank-dot rank-dot--plain">${rank}</span>`;
 
         const tr = document.createElement('tr');
-        tr.className = 'sb-row' + (i < 3 ? ' sb-row--top' : '');
+        tr.className = 'sb-row' + (isTop ? ` sb-row--top sb-row--rank${rank}` : '');
         tr.style.animationDelay = (i * 40) + 'ms';
         tr.innerHTML = `
-            <td class="sb-rank"><span class="rank-dot" style="background:${color}">${i + 1}</span></td>
-            <td class="sb-name">${name}</td>
+            <td class="sb-rank">${rankCell}</td>
+            <td class="sb-name">
+                <div class="sb-player">
+                    <span class="sb-avatar ${avatarClass}" aria-hidden="true">${initial}</span>
+                    <span class="sb-player-name">${name}</span>
+                </div>
+            </td>
             <td class="sb-num">${stats.played}</td>
             <td class="sb-num sb-wins">${stats.wins}</td>
             <td class="sb-num sb-losses">${stats.losses}</td>
@@ -625,7 +784,7 @@ function renderMatches() {
         if (sittingOut.length > 0) {
             headerHTML += `<div class="round-rest-group">
                 <span class="round-rest-label">พัก</span>
-                ${sittingOut.map(name => `<span class="round-rest-name">${name}</span>`).join('')}
+                ${sittingOut.map(name => `<span class="round-rest-name">${nameWithGender(name)}</span>`).join('')}
             </div>`;
         }
 
@@ -643,11 +802,12 @@ function renderMatches() {
             const winnerA = saved && match.scoreA > match.scoreB;
             const winnerB = saved && match.scoreB > match.scoreA;
 
-            // Resolve display names (for triple teams, show actual lineup)
-            let teamADisplay = match.teams[0];
-            let teamBDisplay = match.teams[1];
+            // Resolve display names (for triple teams, show actual lineup).
+            // Each name carries a ช/ญ gender badge.
+            let teamADisplay = namesWithGender(match.teams[0].split(' / '));
+            let teamBDisplay = namesWithGender(match.teams[1].split(' / '));
             if (match.tripleLineup) {
-                const lineupStr = match.tripleLineup.join(' / ');
+                const lineupStr = namesWithGender(match.tripleLineup);
                 const restHtml = `<span class="triple-rest">(${match.tripleRest} พัก)</span>`;
                 if (match.tripleTeamIdx === 0) {
                     teamADisplay = lineupStr + ' ' + restHtml;
@@ -966,16 +1126,31 @@ function generateSchedule() {
         mode: state.settings.mode,
         courts: state.settings.courts,
         prevMatches: state.matches,
-        getPlayers: getMatchPlayers
+        getPlayers: getMatchPlayers,
+        genderOf: genderForPairing,
+        rankOf: rankForPairing
     });
 }
 
+// Gender lookup for the pairing constraint: never pair an all-male team against an
+// all-female team (ช-ช vs ญ-ญ).  Returns 'male' | 'female' | null.
+function genderForPairing(name) {
+    return PlayerMeta.getMeta(state.playerMeta, name).gender;
+}
+
+// Rank lookup for team balancing: of the three ways to split four court players, prefer
+// the one whose teams are closest in total strength.  Returns a rank id | null (unranked
+// players make balance a no-op for that court).
+function rankForPairing(name) {
+    return PlayerMeta.getMeta(state.playerMeta, name).rank;
+}
+
 // Mid-game re-pairing: keep the matches already PLAYED (scored), drop the unplayed
-// ones, and keep pairing the CURRENT roster until everyone has played the same number
-// of games (the normal fairness rule).  Works whether a player LEFT (remove them first
-// — they keep only the games they played) or JOINED late (add them first — they start
-// behind and are paired until they catch up).  continueSchedule continues each player's
-// games-played (no reset), so whoever is ahead simply rests while the rest catch up.
+// ones, and keep pairing the CURRENT roster until the behind players have caught up to
+// whoever was ahead when play paused.  Court usage comes first: every round fills all
+// courts, so counts may end up to a game apart rather than leaving a court idle.  Works
+// whether a player LEFT (remove them first — they keep only the games they played) or
+// JOINED late (add them first — they are paired until they catch up).
 function continueScheduleMidGame() {
     const played = state.matches.filter(m => m.scoreA != null && m.scoreB != null);
     const newMatches = continueSchedule({
@@ -983,7 +1158,9 @@ function continueScheduleMidGame() {
         mode: state.settings.mode,
         courts: state.settings.courts,
         playedMatches: played,
-        getPlayers: getMatchPlayers
+        getPlayers: getMatchPlayers,
+        genderOf: genderForPairing,
+        rankOf: rankForPairing
     });
     return [...played, ...newMatches];
 }
@@ -1088,6 +1265,7 @@ function addPlayerByName(rawName) {
         saveState();
         renderPlayers();
         updateClearButtons();
+        setRosterCollapsed(false);   // reveal the list so the new chip is visible
     }
     recordKnownName(name);
     return true;
@@ -1114,6 +1292,7 @@ function addPlayers(rawInput) {
         saveState();
         renderPlayers();
         updateClearButtons();
+        setRosterCollapsed(false);   // reveal the list so new chips are visible
     }
     return { added, skipped };
 }
@@ -1337,7 +1516,7 @@ function handleContinueMidGame() {
         `จับคู่ต่อกลางคัน?\n\n` +
         `• เก็บ ${played.length} คู่ที่เล่นจบแล้วไว้\n` +
         `• ตัด ${unplayed} คู่ที่ยังไม่ได้เล่นทิ้ง\n` +
-        `• จับคู่ผู้เล่นปัจจุบัน (${state.players.length} คน) ต่อไปเรื่อยๆ จนทุกคนแข่งเท่ากัน`
+        `• จับคู่ผู้เล่นปัจจุบัน (${state.players.length} คน) ต่อ โดยใช้สนามครบทุกรอบจนคนที่ตามหลังไล่ทัน (จำนวนเกมอาจต่างกันได้ ±1)`
     )) return;
 
     const next = continueScheduleMidGame();
@@ -1352,17 +1531,15 @@ function handleContinueMidGame() {
     switchTab('schedule');
 
     if (added === 0) {
-        // continueSchedule added nothing: either everyone is already level, or the
-        // imbalance can't be evened out (every round seats the whole roster — nobody
-        // can rest, e.g. player count is an exact multiple of the court capacity).
+        // continueSchedule added nothing: either everyone is already level (the common
+        // case), or there are too few players left to fill even one court.
+        const seatsPerCourt = state.settings.mode === 'doubles' ? 4 : 2;
         const counts = computeScoreboard();
         const played = state.players.map(p => (counts[p] ? counts[p].played : 0));
         const equal = played.length > 0 && Math.min(...played) === Math.max(...played);
         alert(equal
             ? 'ผู้เล่นปัจจุบันแข่งเท่ากันอยู่แล้ว จึงไม่มีคู่เพิ่ม'
-            : 'จับคู่ให้แข่งเท่ากันไม่ได้ด้วยจำนวนผู้เล่น/สนามนี้ ' +
-              '(ทุกคนต้องลงเล่นทุกตา จึงไม่มีใครได้พักให้คนอื่นไล่ทัน) — ' +
-              'ลองเพิ่ม/ลดผู้เล่น หรือลดจำนวนสนาม');
+            : `ผู้เล่นไม่พอจะตั้งสนาม (ต้องการอย่างน้อย ${seatsPerCourt} คน) — เพิ่มผู้เล่นแล้วลองใหม่`);
     }
 }
 
@@ -1374,6 +1551,7 @@ document.getElementById('clear-players-btn').addEventListener('click', () => {
     if (!confirm('ล้างรายชื่อผู้เล่นทั้งหมด?')) return;
     state.players = [];
     state.matches = [];
+    state.playerMeta = {};
     saveState({ allowEmpty: true });
     renderAll();
 });
@@ -1408,6 +1586,7 @@ document.getElementById('clear-all-btn').addEventListener('click', () => {
     state.matches = [];
     state.scores = {};
     state.history = {};
+    state.playerMeta = {};
     saveState({ allowEmpty: true });
     renderAll();
     switchTab('settings');

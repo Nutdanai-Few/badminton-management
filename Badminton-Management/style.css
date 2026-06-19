@@ -38,6 +38,13 @@
   --color-copy-done: #16a34a;
   --color-chip-bg: #FFFFFF;
   --color-chip-border: #E6EAEF;
+
+  --color-male: #3B82F6;
+  --color-male-bg: #EAF1FF;
+  --color-female: #EC4899;
+  --color-female-bg: #FDEEF6;
+  --color-attention: #F59E0B;
+  --color-attention-bg: #FEF6E7;
 }
 
 /* ===== Dark Theme ===== */
@@ -80,6 +87,13 @@
   --color-copy-done: #22c55e;
   --color-chip-bg: rgba(255, 255, 255, 0.04);
   --color-chip-border: #2A3650;
+
+  --color-male: #60A5FA;
+  --color-male-bg: rgba(96, 165, 250, 0.16);
+  --color-female: #F472B6;
+  --color-female-bg: rgba(244, 114, 182, 0.16);
+  --color-attention: #FBBF24;
+  --color-attention-bg: rgba(251, 191, 36, 0.14);
 }
 
 /* ===== Global Resets ===== */
@@ -239,7 +253,7 @@ input[type=number] {
 }
 
 .page-inner--narrow {
-  max-width: 560px;
+  max-width: 760px;
 }
 
 /* ===== QR Share Button ===== */
@@ -504,6 +518,35 @@ input[type=number] {
   color: var(--color-text-primary);
 }
 
+/* Roster collapse toggle — wraps the "ผู้แข่งขัน" title. Inert on desktop
+   (just shows the title); becomes a tap-to-collapse control on mobile.
+   NOTE: named .roster-collapse (NOT .roster-toggle, which already exists for the
+   name-input dropdown chevron and is position:absolute). */
+.roster-collapse {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;          /* never let the title collapse/wrap when the header wraps */
+  white-space: nowrap;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: default;
+  pointer-events: none;
+}
+
+.roster-chev {
+  display: none;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  transition: transform 0.2s ease;
+}
+
 .section-header-right {
   display: flex;
   align-items: center;
@@ -518,20 +561,57 @@ input[type=number] {
   padding: 3px 11px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--color-accent) 18%, transparent);
+  white-space: nowrap;
+}
+
+/* Schedule header: title sits left; the count badge + action buttons group
+   together on the right. The auto margin on the title absorbs the free space so
+   the badge hugs the button group rather than floating in the middle. */
+.section-header--schedule {
+  gap: 8px;
+}
+
+.section-header--schedule .section-label {
+  margin-right: auto;
+}
+
+/* "จับคู่ต่อ" is the recommended next step → solid filled primary at every
+   size, so it reads clearly differently from the outlined "สุ่มคู่ใหม่". */
+.section-header--schedule #continue-btn.btn-reshuffle--continue {
+  background: var(--color-accent-gradient);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 4px 12px -4px var(--color-accent-glow);
+}
+
+.section-header--schedule #continue-btn.btn-reshuffle--continue:hover {
+  background: var(--color-accent-gradient);
+  color: #fff;
+  filter: brightness(1.06);
 }
 
 /* ===== Reshuffle Button ===== */
 .btn-reshuffle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   font-size: 12px;
   font-weight: 600;
   color: var(--color-accent);
   background: transparent;
   border: 1px solid var(--color-accent);
   border-radius: 999px;
-  padding: 2px 12px;
+  padding: 4px 12px;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
   white-space: nowrap;
+}
+
+.btn-reshuffle svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 .btn-reshuffle:hover {
@@ -581,16 +661,26 @@ input[type=number] {
 
 /* ===== Clear Buttons ===== */
 .btn-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   font-size: 12px;
   font-weight: 500;
   color: var(--color-danger);
   background: transparent;
   border: 1px solid var(--color-danger);
   border-radius: 999px;
-  padding: 2px 12px;
+  padding: 4px 12px;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
   white-space: nowrap;
+}
+
+.btn-clear svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 .btn-clear:hover {
@@ -858,54 +948,235 @@ input[type=number] {
 }
 
 /* ===== Player Chips ===== */
+/* Responsive grid: one roomy row per player on phones, multiple columns when
+   there's width.  Each chip carries the name plus inline gender + rank controls. */
 .player-chips {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
   gap: 8px;
   margin-top: 16px;
   min-height: 36px;
 }
 
 .player-chip {
-  display: inline-flex;
+  position: relative;
+  display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 8px 4px 4px;
-  background: var(--color-chip-bg);
-  border: 1px solid var(--color-chip-border);
-  border-radius: 999px;
-  font-size: 14px;
+  gap: 7px;
+  padding: 5px 8px 5px 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  font-size: 15px;
   font-weight: 500;
   color: var(--color-text-primary);
-  box-shadow: 0 1px 2px var(--color-shadow);
   animation: slideUp 200ms ease-out both;
-  transition: box-shadow 0.18s ease, transform 0.18s ease, border-color 0.18s ease;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+  /* Left accent bar signals state at a glance: amber = needs gender,
+     blue/pink = gender set.  Coloured per state below. */
+  box-shadow: inset 3px 0 0 0 var(--color-attention), 0 1px 2px var(--color-shadow);
 }
 
 .player-chip:hover {
-  transform: translateY(-2px);
-  border-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
-  box-shadow: 0 8px 18px -8px var(--color-shadow-lg);
+  border-color: var(--color-border-strong);
+  box-shadow: inset 3px 0 0 0 var(--accent-bar, var(--color-attention)),
+              0 6px 16px -10px var(--color-shadow-lg);
+}
+
+.chip--male {
+  --accent-bar: var(--color-male);
+  box-shadow: inset 3px 0 0 0 var(--color-male), 0 1px 2px var(--color-shadow);
+}
+.chip--female {
+  --accent-bar: var(--color-female);
+  box-shadow: inset 3px 0 0 0 var(--color-female), 0 1px 2px var(--color-shadow);
+}
+.chip--nogender {
+  --accent-bar: var(--color-attention);
+  border-color: color-mix(in srgb, var(--color-attention) 35%, var(--color-border));
+}
+
+/* Each chip is its own stacking context (the slideUp animation leaves a
+   transform), so an open rank menu would be trapped beneath later chips.
+   Lift the chip holding the open menu above its siblings. */
+.player-chip:has(.chip-rank.open) {
+  z-index: 40;
 }
 
 .chip-name {
-  padding-right: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chip-avatar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   flex-shrink: 0;
   border-radius: 50%;
   background: var(--color-accent-gradient);
   color: #fff;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   line-height: 1;
   box-shadow: 0 2px 6px var(--color-accent-glow);
+}
+
+/* Colour the avatar by gender so the roster is scannable at a glance. */
+.chip--male .chip-avatar {
+  background: var(--color-male);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--color-male) 40%, transparent);
+}
+.chip--female .chip-avatar {
+  background: var(--color-female);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--color-female) 40%, transparent);
+}
+.chip--nogender .chip-avatar {
+  background: var(--color-text-muted);
+  box-shadow: none;
+}
+
+/* ----- Inline gender toggle (ช / ญ) — one tap, no modal ----- */
+.chip-gender-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+}
+
+.chip-gbtn {
+  min-width: 27px;
+  height: 26px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.chip-gbtn:hover { color: var(--color-text-primary); }
+
+.chip-gbtn[data-gender="male"][aria-pressed="true"] {
+  background: var(--color-male);
+  color: #fff;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--color-male) 45%, transparent);
+}
+.chip-gbtn[data-gender="female"][aria-pressed="true"] {
+  background: var(--color-female);
+  color: #fff;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--color-female) 45%, transparent);
+}
+
+/* Nudge attention to the toggle while gender is still unset. */
+.chip--nogender .chip-gender-toggle {
+  border-color: color-mix(in srgb, var(--color-attention) 50%, var(--color-border));
+  background: var(--color-attention-bg);
+}
+
+/* ----- Inline rank picker (themed custom dropdown — matches dark theme) ----- */
+.chip-rank {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.chip-rank-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 3px;
+  width: 78px;
+  height: 30px;
+  padding: 0 7px 0 11px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
+}
+
+.chip-rank-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-rank-btn svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: transform 0.18s ease;
+}
+
+.chip-rank.open .chip-rank-btn { border-color: var(--color-accent); }
+.chip-rank.open .chip-rank-btn svg { transform: rotate(180deg); }
+
+/* Once a rank is chosen, tint the trigger so it reads as "set". */
+.chip-rank--set .chip-rank-btn {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
+  background-color: var(--color-accent-light);
+  color: var(--color-accent-2);
+}
+
+.chip-rank-btn:hover { border-color: var(--color-border-strong); }
+
+/* The dropdown menu — themed to match .name-suggestions. */
+.chip-rank-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  min-width: 132px;
+  padding: 6px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  box-shadow: 0 14px 32px -8px var(--color-shadow-lg);
+}
+
+.chip-rank.open .chip-rank-menu {
+  display: block;
+  animation: slideUp 140ms ease-out both;
+}
+
+.chip-rank-opt {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.chip-rank-opt:hover { background: var(--color-bg); }
+
+.chip-rank-opt.selected {
+  background: var(--color-accent-light);
+  color: var(--color-accent-2);
+  font-weight: 700;
 }
 
 .player-chip.removing {
@@ -916,8 +1187,9 @@ input[type=number] {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
   border: none;
   border-radius: 50%;
   background: transparent;
@@ -1248,6 +1520,23 @@ input[type=number] {
   margin-left: 4px;
 }
 
+/* Small gender dot before a player name (blue = male, pink = female).
+   Just a dot — the name keeps its normal colour so it stays easy to read. */
+.gdot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.gdot--male {
+  background: var(--color-male);
+}
+.gdot--female {
+  background: var(--color-female);
+}
+
 /* ===== Score Input ===== */
 .score-cell {
   text-align: center;
@@ -1363,10 +1652,10 @@ input[type=number] {
   overflow-x: auto;
 }
 
-/* ===== Scoreboard Table ===== */
 .sb-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0 6px;
   font-feature-settings: "tnum";
 }
 
@@ -1383,12 +1672,12 @@ input[type=number] {
   color: var(--color-text-muted);
   font-weight: 600;
   padding-top: 0;
-  padding-bottom: 12px;
-  border-bottom: 2px solid var(--color-border);
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--color-border);
   white-space: nowrap;
 }
 
-.sb-th-rank { text-align: center; width: 52px; }
+.sb-th-rank { text-align: center; width: 56px; }
 .sb-th-name { text-align: left; }
 .sb-th-num  { text-align: center; width: 60px; }
 .sb-th-bar  { text-align: left; min-width: 120px; }
@@ -1397,19 +1686,45 @@ input[type=number] {
   animation: slideUp 200ms ease-out both;
 }
 
+/* Each row reads as its own soft row-card with rounded ends. */
 .sb-row td {
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
   border-bottom: 1px solid var(--color-border);
+  transition: background-color 0.18s ease;
 }
 
-.sb-row:last-child td { border-bottom: none; }
+.sb-row td:first-child {
+  border-left: 1px solid var(--color-border);
+  border-radius: 12px 0 0 12px;
+}
 
-.sb-row--top:nth-child(1) td { background: rgba(245, 158, 11, 0.08); }
-.sb-row--top:nth-child(2) td { background: rgba(148, 163, 184, 0.06); }
-.sb-row--top:nth-child(3) td { background: rgba(205, 127, 50,  0.08); }
+.sb-row td:last-child {
+  border-right: 1px solid var(--color-border);
+  border-radius: 0 12px 12px 0;
+}
+
+.sb-row:hover td {
+  background: var(--color-bg);
+}
+
+/* Top-3 rows: tinted by their medal colour + a matching left accent bar. */
+.sb-row--top td { background: var(--row-tint); }
+.sb-row--top:hover td {
+  background: color-mix(in srgb, var(--row-accent) 16%, var(--color-surface));
+}
+.sb-row--top td:first-child {
+  border-left: none;
+  box-shadow: inset 3px 0 0 0 var(--row-accent);
+}
+.sb-row--rank1 { --row-accent: var(--color-rank-1); --row-tint: rgba(245, 158, 11, 0.07); }
+.sb-row--rank2 { --row-accent: var(--color-rank-2); --row-tint: rgba(148, 163, 184, 0.07); }
+.sb-row--rank3 { --row-accent: var(--color-rank-3); --row-tint: rgba(205, 127, 50, 0.07); }
 
 .sb-rank { text-align: center; }
 
-.rank-dot {
+/* Plain ranks (4th+): quiet outlined circle. */
+.rank-dot--plain {
   width: 30px;
   height: 30px;
   border-radius: 50%;
@@ -1418,13 +1733,87 @@ input[type=number] {
   justify-content: center;
   font-size: 13px;
   font-weight: 700;
-  color: white;
+  color: var(--color-text-secondary);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
 }
 
-.sb-name {
+/* Podium medals (top 3): metallic fill, glow, white number. */
+.sb-medal {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+
+.sb-medal-num {
+  font-size: 13px;
+  font-weight: 800;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.sb-medal--1 {
+  background: linear-gradient(145deg, #FCD34D 0%, #F59E0B 100%);
+  box-shadow: 0 3px 10px -2px rgba(245, 158, 11, 0.6);
+}
+.sb-medal--2 {
+  background: linear-gradient(145deg, #EEF2F7 0%, #94A3B8 100%);
+  box-shadow: 0 3px 10px -2px rgba(148, 163, 184, 0.55);
+}
+.sb-medal--3 {
+  background: linear-gradient(145deg, #E3A877 0%, #B45309 100%);
+  box-shadow: 0 3px 10px -2px rgba(205, 127, 50, 0.55);
+}
+
+/* Crown floating above the #1 medal. */
+.sb-crown {
+  position: absolute;
+  top: -11px;
+  left: 50%;
+  transform: translateX(-50%) rotate(-8deg);
+  width: 16px;
+  height: 16px;
+  color: #FBBF24;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
+}
+
+/* ----- Name cell: gender-coloured avatar + name ----- */
+.sb-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sb-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+}
+
+.sb-avatar--male   { background: var(--color-male); }
+.sb-avatar--female { background: var(--color-female); }
+.sb-avatar--none   { background: var(--color-text-muted); }
+
+.sb-player-name {
   font-size: 14px;
   font-weight: 600;
   color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sb-num {
@@ -1437,21 +1826,18 @@ input[type=number] {
 .sb-wins   { color: var(--color-accent); font-weight: 700; }
 .sb-losses { color: var(--color-danger); font-weight: 600; }
 
-.sb-bar-cell {
-  /* td stays as table-cell — flex applied to inner div only */
-}
-
 .sb-bar-inner {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .sb-bar-track {
   flex: 1;
-  height: 7px;
+  height: 9px;
   background: var(--color-bg);
-  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
   overflow: hidden;
   min-width: 60px;
 }
@@ -1459,15 +1845,16 @@ input[type=number] {
 .sb-bar-fill {
   height: 100%;
   background: var(--color-accent-gradient);
-  border-radius: 4px;
+  border-radius: 999px;
+  box-shadow: 0 0 8px -1px var(--color-accent-glow);
   transition: width 0.5s ease-out;
 }
 
 .sb-rate {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--color-text-secondary);
-  min-width: 38px;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--color-accent-2);
+  min-width: 42px;
   text-align: right;
 }
 
@@ -1668,6 +2055,23 @@ input[type=number] {
 
 /* ===== Responsive ===== */
 @media (max-width: 639px) {
+  /* -- Roster collapse: tap the title to hide/show the (long) name list -- */
+  .roster-collapse {
+    pointer-events: auto;
+    cursor: pointer;
+  }
+  .roster-chev { display: block; }
+  .roster-collapsed .roster-chev { transform: rotate(-90deg); }
+  .roster-collapsed #players-list { display: none; }
+  /* The players header has the collapse title on the left; keep its action group
+     at content width so title + badge + clear stay on one tidy row (the global
+     width:100% rule below is for headers whose buttons must wrap under). */
+  #players-section .section-header-right { width: auto; }
+  #players-section .section-header { flex-wrap: nowrap; gap: 8px; }
+  /* Nothing to collapse on an empty roster — drop the chevron. */
+  .roster-empty .roster-collapse { pointer-events: none; }
+  .roster-empty .roster-chev { display: none; }
+
   /* -- Section header: wrap when buttons overflow -- */
   .section-header {
     flex-wrap: wrap;
@@ -1680,6 +2084,52 @@ input[type=number] {
     justify-content: flex-end;
     flex-wrap: wrap;
     gap: 6px;
+  }
+
+  /* -- Schedule header: title + badge on one row, actions as a tidy toolbar -- */
+  .section-header--schedule {
+    align-items: center;
+    gap: 12px 8px;
+  }
+
+  /* Title takes row 1; the badge hugs the right edge of that same row. */
+  .section-header--schedule .section-label {
+    margin-right: 0;
+    flex: 1 1 auto;
+  }
+
+  .section-header--schedule #match-count-badge {
+    margin-left: auto;
+    font-size: 12px;
+    padding: 4px 12px;
+  }
+
+  /* Actions break onto their own row as an even, finger-friendly grid. */
+  .section-header--schedule .section-header-right {
+    flex-basis: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  /* "จับคู่ต่อ" is the primary continuation action — give it the full width. */
+  .section-header--schedule #continue-btn {
+    grid-column: 1 / -1;
+  }
+
+  .section-header--schedule .btn-reshuffle,
+  .section-header--schedule .btn-clear {
+    height: 42px;
+    padding: 0 14px;
+    font-size: 13px;
+    border-radius: 12px;
+    gap: 7px;
+  }
+
+  .section-header--schedule .btn-reshuffle svg,
+  .section-header--schedule .btn-clear svg {
+    width: 16px;
+    height: 16px;
   }
 
   /* -- Match table → card layout -- */
