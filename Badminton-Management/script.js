@@ -1492,17 +1492,15 @@ function handleContinueMidGame() {
     switchTab('schedule');
 
     if (added === 0) {
-        // continueSchedule added nothing: either everyone is already level, or the
-        // imbalance can't be evened out (every round seats the whole roster — nobody
-        // can rest, e.g. player count is an exact multiple of the court capacity).
+        // continueSchedule added nothing: either everyone is already level (the common
+        // case), or there are too few players left to fill even one court.
+        const seatsPerCourt = state.settings.mode === 'doubles' ? 4 : 2;
         const counts = computeScoreboard();
         const played = state.players.map(p => (counts[p] ? counts[p].played : 0));
         const equal = played.length > 0 && Math.min(...played) === Math.max(...played);
         alert(equal
             ? 'ผู้เล่นปัจจุบันแข่งเท่ากันอยู่แล้ว จึงไม่มีคู่เพิ่ม'
-            : 'จับคู่ให้แข่งเท่ากันไม่ได้ด้วยจำนวนผู้เล่น/สนามนี้ ' +
-              '(ทุกคนต้องลงเล่นทุกตา จึงไม่มีใครได้พักให้คนอื่นไล่ทัน) — ' +
-              'ลองเพิ่ม/ลดผู้เล่น หรือลดจำนวนสนาม');
+            : `ผู้เล่นไม่พอจะตั้งสนาม (ต้องการอย่างน้อย ${seatsPerCourt} คน) — เพิ่มผู้เล่นแล้วลองใหม่`);
     }
 }
 

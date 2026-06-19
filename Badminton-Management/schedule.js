@@ -274,12 +274,19 @@
     // the new matches to append.  Players not in `players` (i.e. removed) are never
     // paired again — their already-played games and stats stand as-is.
     //
-    // Fairness rule = the SAME as a normal schedule: keep pairing (fewest-played
-    // first, full courts) until every CURRENT player has played the same number of
-    // games, then stop.  Each player's games-played carries over (no reset), so a
-    // player who is ahead simply RESTS while the others catch up to them — nobody is
-    // dragged into extra games past the equal level.  A latecomer starts behind and
-    // is paired more often until they reach everyone else's level.
+    // Fairness rule: keep pairing the CURRENT roster until EVERYONE has played the same
+    // number of games, then stop.  Each player's games-played carries over (no reset), so
+    // a player who is ahead simply RESTS while the others catch up to them — nobody is
+    // dragged into extra games past the equal level.  A latecomer starts behind and is
+    // paired more often until they reach everyone else's level.
+    //
+    // Every round fills ALL configured courts (the fewest-played play first, so whoever is
+    // ahead rests).  A court is left empty ONLY when the roster has already become equal
+    // partway through a round — opening another court would then push someone past the
+    // equal level.  This is what lets the schedule reach EXACT equality even when the
+    // courts are big enough to seat the whole roster (e.g. 8 players / 2 courts): the final
+    // catch-up round opens just one court for the four behind players while the four ahead
+    // rest, instead of seating all eight and overshooting forever.
     //   players        — current roster (withdrawn players already removed / latecomers added)
     //   mode           — 'doubles' | 'singles'
     //   courts         — courts available per round
@@ -310,12 +317,6 @@
 
         // Too few players left to fill even one court.
         if (players.length < seatsPerCourt) return [];
-
-        // If every round would seat the entire roster (courts big enough for everyone),
-        // nobody can ever rest, so an imbalance left by a departed/late player can never
-        // be evened out by adding rounds.  Don't loop forever — return nothing.
-        const seatsPerRound = seatsPerCourt * Math.min(courts, Math.floor(players.length / seatsPerCourt));
-        if (seatsPerRound >= players.length) return [];
 
         // Carry partner history over from the played matches so fresh partnerships are
         // still preferred across the whole session (doubles only).
@@ -352,12 +353,13 @@
             return Math.max(...c) - Math.min(...c);
         };
 
-        // Normal scheduling, just seeded with the games already played: each round
-        // seats the fewest-played players (full courts), so whoever is ahead rests
-        // until the rest catch up.  Stop the instant everyone is level (spread 0).
-        // `seatsPerRound < players.length` (guaranteed above) means there is always
-        // someone able to rest, so the gap shrinks every round and this terminates.
-        // The +1000 ceiling is only a safety backstop.
+        // Each round fills ALL configured courts with the fewest-played players first, so
+        // whoever is ahead is the one who rests until the rest catch up.  Stop the instant
+        // everyone is level (spread 0).  The only time a court is left empty is when the
+        // roster becomes equal partway through a round (see the inner loop): opening one
+        // more court would push someone past the equal level.  At least one behind player
+        // advances every round while a gap remains, so this marches toward equality and
+        // terminates.  The +1000 ceiling is only a backstop.
         for (let r = maxRound + 1; r <= maxRound + 1000; r++) {
             if (spread() === 0) break;
 
@@ -370,6 +372,13 @@
             let opened = 0;
 
             for (let c = 0; c < courts; c++) {
+                // Use ALL configured courts every round — EXCEPT stop opening more courts
+                // the moment everyone has become equal partway through this round.  Seating
+                // another court would then push someone past the equal level and break it,
+                // so we leave that court empty.  This is the ONLY time a court is left idle:
+                // every round where players are still behind fills all the courts (the
+                // fewest-played play first, so whoever is ahead is the one who rests).
+                if (spread() === 0) break;
                 const available = sorted.filter(p => !usedThisRound.has(p));
                 if (available.length < seatsPerCourt) break;
                 const picked = available.slice(0, seatsPerCourt);
