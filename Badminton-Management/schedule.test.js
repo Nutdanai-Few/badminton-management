@@ -1,7 +1,7 @@
 // Tests for the match-scheduling logic — the pairing/fairness rules.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { shuffle, roundRobin, makeSchedule, continueSchedule, teamGender, forbiddenMatch } = require('./schedule.js');
+const { shuffle, roundRobin, makeSchedule, continueSchedule, teamGender, forbiddenMatch, rankBalanceCost } = require('./schedule.js');
 
 // A deterministic RNG so tests don't flake.  A simple LCG seeded per test.
 function seededRand(seed) {
@@ -648,4 +648,121 @@ test('continueSchedule: singles continues until everyone is equal', () => {
     const counts = playCounts(remaining, [...playedSingles, ...out]);
     assert.equal(spreadOf(Object.values(counts)), 0, 'singles: everyone ends equal');
     assert.ok(Math.min(...Object.values(counts)) >= 1, 'the behind players get to play');
+});
+
+// ===== doubles: rank-balanced teams =====
+
+// Build a rankOf lookup from a {name: rankId} map.
+const rankLookup = map => name => map[name] || null;
+// Numeric strength of a rank id (mirrors RANK_VALUE in schedule.js).
+const RVAL = { beginner: 1, intermediate: 2, advanced: 3, pro: 4 };
+// Total strength of a doubles team string under a rank map.
+function teamStrength(teamStr, rmap) {
+    return teamStr.split(' / ').map(s => s.trim()).reduce((s, p) => s + RVAL[rmap[p]], 0);
+}
+// |strengthA - strengthB| for a finished match (for assertions).
+function matchGap(match, rmap) {
+    return Math.abs(teamStrength(match.teams[0], rmap) - teamStrength(match.teams[1], rmap));
+}
+
+test('rankBalanceCost: strength gap of the split, 0 when any player is unranked', () => {
+    const r = rankLookup({ a: 'beginner', b: 'pro', c: 'intermediate', d: 'advanced' });
+    // {a,b}=1+4=5 vs {c,d}=2+3=5 -> gap 0
+    assert.equal(rankBalanceCost(['a', 'b'], ['c', 'd'], r), 0);
+    // {a,c}=1+2=3 vs {b,d}=4+3=7 -> gap 4
+    assert.equal(rankBalanceCost(['a', 'c'], ['b', 'd'], r), 4);
+    // Any unranked member -> 0 (balance has no say; fail-safe).
+    const r2 = rankLookup({ a: 'beginner', b: 'pro', c: 'intermediate' /* d unranked */ });
+    assert.equal(rankBalanceCost(['a', 'b'], ['c', 'd'], r2), 0, 'unranked d -> cost 0');
+});
+
+test('doubles: a ranked foursome is split into the closest-strength teams', () => {
+    // Strengths 1,2,3,4. Only {1,4} vs {2,3} is perfectly balanced (5 vs 5).
+    const players = ['p1', 'p2', 'p3', 'p4'];
+    const rmap = { p1: 'beginner', p2: 'intermediate', p3: 'advanced', p4: 'pro' };
+    for (const seed of [1, 2, 3, 7, 13, 42, 99, 256]) {
+        const matches = makeSchedule({
+            players, mode: 'doubles', courts: 1, rankOf: rankLookup(rmap), rand: seededRand(seed),
+        });
+        assert.equal(matches.length, 1);
+        assert.equal(matchGap(matches[0], rmap), 0, `seed ${seed}: must pick the balanced split`);
+    }
+});
+
+test('doubles: a stacked split is never chosen when a balanced one exists', () => {
+    // Two pros + two beginners: {pro,beginner} vs {pro,beginner} is balanced (gap 0);
+    // {pro,pro} vs {beginner,beginner} is the stacked split (gap 6) and must be avoided.
+    const players = ['a1', 'a2', 'b1', 'b2'];
+    const rmap = { a1: 'pro', a2: 'pro', b1: 'beginner', b2: 'beginner' };
+    for (const seed of [1, 4, 9, 21, 77, 500]) {
+        const matches = makeSchedule({
+            players, mode: 'doubles', courts: 1, rankOf: rankLookup(rmap), rand: seededRand(seed),
+        });
+        assert.equal(matchGap(matches[0], rmap), 0, `seed ${seed}: stacked split must not be chosen`);
+    }
+});
+
+test('doubles: an unranked player in the foursome disables balancing (fallback)', () => {
+    // p4 unranked -> rankBalanceCost is 0 for every split, so the stacked split is NOT
+    // avoided; scheduling still works and stays fair.
+    const players = ['p1', 'p2', 'p3', 'p4'];
+    const rmap = { p1: 'beginner', p2: 'intermediate', p3: 'advanced' /* p4 unranked */ };
+    const matches = makeSchedule({
+        players, mode: 'doubles', courts: 1, rankOf: rankLookup(rmap), rand: seededRand(3),
+    });
+    assert.equal(matches.length, 1, 'still schedules normally');
+    const counts = Object.values(playCounts(players, matches));
+    assert.equal(spreadOf(counts), 0, 'fairness preserved');
+});
+
+test('doubles: the gender constraint outranks balance (no MM-vs-FF even if best balanced)', () => {
+    // m1=pro(4) m2=beginner(1) f1=advanced(3) f2=intermediate(2).
+    // The perfectly balanced split {m1,m2}=5 vs {f1,f2}=5 is MM-vs-FF (forbidden);
+    // gender must win, forcing a (less balanced) mixed-vs-mixed split.
+    const players = ['m1', 'm2', 'f1', 'f2'];
+    const gmap = { m1: 'male', m2: 'male', f1: 'female', f2: 'female' };
+    const rmap = { m1: 'pro', m2: 'beginner', f1: 'advanced', f2: 'intermediate' };
+    for (const seed of [1, 2, 5, 9, 33, 88]) {
+        const matches = makeSchedule({
+            players, mode: 'doubles', courts: 1,
+            genderOf: genderLookup(gmap), rankOf: rankLookup(rmap), rand: seededRand(seed),
+        });
+        assert.ok(!hasForbidden(matches, gmap), `seed ${seed}: gender must override balance`);
+        assert.equal(teamGenderOf(matches[0].teams[0], gmap), 'mixed');
+        assert.equal(teamGenderOf(matches[0].teams[1], gmap), 'mixed');
+    }
+});
+
+test('doubles: fairness (equal play counts) still holds with rankOf supplied', () => {
+    const players = names(8);
+    const rmap = {
+        '1': 'beginner', '2': 'beginner', '3': 'intermediate', '4': 'intermediate',
+        '5': 'advanced', '6': 'advanced', '7': 'pro', '8': 'pro',
+    };
+    for (const seed of [1, 2, 3, 7, 13, 42]) {
+        const matches = makeSchedule({
+            players, mode: 'doubles', courts: 2, rankOf: rankLookup(rmap), rand: seededRand(seed),
+        });
+        const counts = Object.values(playCounts(players, matches));
+        assert.equal(spreadOf(counts), 0, `seed ${seed}: play counts must stay equal`);
+    }
+});
+
+test('continueSchedule: mid-game re-pairing also balances ranked teams', () => {
+    // One court has played; continue with a fresh balanced foursome 1,2,3,4.
+    const players = ['p1', 'p2', 'p3', 'p4'];
+    const rmap = { p1: 'beginner', p2: 'intermediate', p3: 'advanced', p4: 'pro' };
+    const playedMatches = [played('p1 / p4', 'p2 / p3', 1)]; // everyone at 1 game
+    // Add a latecomer set so a new ranked foursome must be paired again.
+    const roster = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8'];
+    Object.assign(rmap, { p5: 'beginner', p6: 'intermediate', p7: 'advanced', p8: 'pro' });
+    for (const seed of [1, 2, 5, 11, 42]) {
+        const out = continueSchedule({
+            players: roster, mode: 'doubles', courts: 1, playedMatches,
+            rankOf: rankLookup(rmap), rand: seededRand(seed),
+        });
+        // p5..p8 (the four behind) take the next court; their split must be balanced.
+        const firstNew = out[0];
+        assert.equal(matchGap(firstNew, rmap), 0, `seed ${seed}: continuation must balance`);
+    }
 });

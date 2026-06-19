@@ -16,10 +16,8 @@ Both are edited from the player chip on the Settings tab via an inline editor.
 - Display gender (colour-coded avatar + ช/ญ tag) and rank badge on each chip.
 
 ### Out of scope (for now)
-- Using gender/rank inside the pairing algorithm (mixed doubles, rank-balanced
-  teams). The user confirmed pairing *will* use these later but will specify the
-  rules separately. The data model and helpers are built ready for it; no matching
-  logic is changed yet.
+- ~~Using gender/rank inside the pairing algorithm~~ — now done: gender constraint
+  (`gender-pairing-constraint.md`) and rank-balanced teams (`rank-balanced-pairing.md`).
 
 ## Data model
 `state.players` stays a plain `string[]` (the immutable player id used everywhere:
@@ -76,4 +74,4 @@ All editing happens directly on the chip; no modal/extra taps:
 - [x] `sync-guard.js` merge + test
 - [x] chip rendering + edit modal + styles
 - [x] generate-button gender guard
-- [ ] pairing algorithm integration (awaiting user's rules)
+- [x] pairing algorithm integration (gender constraint + rank-balanced teams)

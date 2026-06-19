@@ -1127,7 +1127,8 @@ function generateSchedule() {
         courts: state.settings.courts,
         prevMatches: state.matches,
         getPlayers: getMatchPlayers,
-        genderOf: genderForPairing
+        genderOf: genderForPairing,
+        rankOf: rankForPairing
     });
 }
 
@@ -1135,6 +1136,13 @@ function generateSchedule() {
 // all-female team (ช-ช vs ญ-ญ).  Returns 'male' | 'female' | null.
 function genderForPairing(name) {
     return PlayerMeta.getMeta(state.playerMeta, name).gender;
+}
+
+// Rank lookup for team balancing: of the three ways to split four court players, prefer
+// the one whose teams are closest in total strength.  Returns a rank id | null (unranked
+// players make balance a no-op for that court).
+function rankForPairing(name) {
+    return PlayerMeta.getMeta(state.playerMeta, name).rank;
 }
 
 // Mid-game re-pairing: keep the matches already PLAYED (scored), drop the unplayed
@@ -1151,7 +1159,8 @@ function continueScheduleMidGame() {
         courts: state.settings.courts,
         playedMatches: played,
         getPlayers: getMatchPlayers,
-        genderOf: genderForPairing
+        genderOf: genderForPairing,
+        rankOf: rankForPairing
     });
     return [...played, ...newMatches];
 }
