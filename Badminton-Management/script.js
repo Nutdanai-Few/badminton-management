@@ -19,7 +19,8 @@ let state = {
     settings: { mode: 'singles', courts: 1 },
     matches: [],
     scores: {},   // {playerName: {played, wins, losses}} — persists across schedule regeneration
-    history: {}
+    history: {},
+    playerMeta: {} // {playerName: {gender:'male'|'female'|null, rank:'beginner'|...|null}}
 };
 
 // ===== Firebase Real-time Sync =====
@@ -68,6 +69,7 @@ function writeLocalCache() {
             matches: state.matches,
             scores: state.scores,
             history: state.history,
+            playerMeta: state.playerMeta,
             updatedAt: localUpdatedAt
         }));
     } catch { /* storage disabled or full — Firebase remains the backstop */ }
@@ -97,6 +99,8 @@ function applySnapshot(data) {
         state.matches = data.matches || [];
         state.scores = data.scores || {};
         state.history = data.history || {};
+        // Sanitise + prune meta to the incoming roster (drops orphans/legacy gaps).
+        state.playerMeta = PlayerMeta.normalizePlayerMeta(data.playerMeta || {}, state.players);
     }
     // `data` is null only for a brand-new database that has never been written;
     // in that case we keep the empty default state.
@@ -125,6 +129,7 @@ function saveState({ allowEmpty = false } = {}) {
             matches: state.matches,
             scores: state.scores,
             history: state.history,
+            playerMeta: state.playerMeta,
             updatedAt: localUpdatedAt
         });
     }, 300);
@@ -140,6 +145,7 @@ function flushLocalToFirebase() {
         matches: state.matches,
         scores: state.scores,
         history: state.history,
+        playerMeta: state.playerMeta,
         updatedAt: localUpdatedAt
     });
 }
@@ -253,6 +259,10 @@ function emptyStateHTML(icon, title, hint) {
     `;
 }
 
+// ===== Player gender display labels =====
+const GENDER_SHORT = { male: 'ช', female: 'ญ' };
+const GENDER_LABEL = { male: 'ชาย', female: 'หญิง' };
+
 // ===== Render: Players =====
 function renderPlayers() {
     const container = document.getElementById('players-list');
@@ -260,6 +270,8 @@ function renderPlayers() {
     container.innerHTML = '';
 
     badge.textContent = state.players.length + ' คน';
+    document.getElementById('players-section')
+        .classList.toggle('roster-empty', state.players.length === 0);
 
     if (state.players.length === 0) {
         container.innerHTML = emptyStateHTML(
@@ -273,38 +285,150 @@ function renderPlayers() {
 
     state.players.forEach((name, idx) => {
         const chip = document.createElement('div');
-        chip.className = 'player-chip';
+        const { gender, rank } = PlayerMeta.getMeta(state.playerMeta, name);
+        chip.className = 'player-chip'
+            + (gender ? ` chip--${gender}` : ' chip--nogender');
         chip.style.animationDelay = (idx * 30) + 'ms';
         const initial = (name.trim()[0] || '?').toUpperCase();
+
+        // Gender: an inline one-tap toggle (required). Rank: a themed custom
+        // dropdown (optional) — a native <select>'s open list can't be styled to
+        // match the dark theme, so we render our own menu. The trigger shows the
+        // short label; the menu uses full labels (it has room).
+        const rankI = PlayerMeta.rankInfo(rank);
+        const rankMenu = `<button type="button" class="chip-rank-opt${!rank ? ' selected' : ''}" data-idx="${idx}" data-rank="">ไม่ระบุ</button>`
+            + PlayerMeta.RANKS.map(r =>
+                `<button type="button" class="chip-rank-opt${rank === r.id ? ' selected' : ''}" data-idx="${idx}" data-rank="${r.id}">${r.label}</button>`
+            ).join('');
+
         chip.innerHTML = `
             <span class="chip-avatar" aria-hidden="true">${initial}</span>
             <span class="chip-name">${name}</span>
-            <button class="chip-remove" aria-label="ลบ ${name}" data-idx="${idx}">
+            <div class="chip-gender-toggle" role="group" aria-label="เพศของ ${name}">
+                <button type="button" class="chip-gbtn" data-idx="${idx}" data-gender="male"
+                        aria-label="${GENDER_LABEL.male}" aria-pressed="${gender === 'male'}">${GENDER_SHORT.male}</button>
+                <button type="button" class="chip-gbtn" data-idx="${idx}" data-gender="female"
+                        aria-label="${GENDER_LABEL.female}" aria-pressed="${gender === 'female'}">${GENDER_SHORT.female}</button>
+            </div>
+            <div class="chip-rank${rank ? ' chip-rank--set' : ''}">
+                <button type="button" class="chip-rank-btn" data-idx="${idx}"
+                        aria-haspopup="true" aria-expanded="false" aria-label="ระดับมือของ ${name}">
+                    <span class="chip-rank-label">${rankI ? rankI.short : 'ระดับ'}</span>
+                    ${ICONS.chevronDown}
+                </button>
+                <div class="chip-rank-menu" role="menu">${rankMenu}</div>
+            </div>
+            <button type="button" class="chip-remove" data-idx="${idx}" aria-label="ลบ ${name}">
                 ${ICONS.x}
             </button>
         `;
         container.appendChild(chip);
     });
 
-    document.getElementById('player-name').focus();
     updateGenerateButton();
 }
 
-// Event delegation for player removal
+// Update one chip's gender visuals in place — no full re-render, so tapping a
+// gender button never re-runs the slide-in animation or pops the mobile keyboard.
+function refreshChipGender(chip, name) {
+    const { gender } = PlayerMeta.getMeta(state.playerMeta, name);
+    chip.classList.toggle('chip--male', gender === 'male');
+    chip.classList.toggle('chip--female', gender === 'female');
+    chip.classList.toggle('chip--nogender', !gender);
+    chip.querySelectorAll('.chip-gbtn').forEach(b =>
+        b.setAttribute('aria-pressed', String(b.dataset.gender === gender)));
+}
+
+// Event delegation: remove a player, or set their gender with one tap.
 document.getElementById('players-list').addEventListener('click', e => {
-    const btn = e.target.closest('.chip-remove');
-    if (!btn) return;
-    const idx = parseInt(btn.dataset.idx, 10);
-    const chip = btn.closest('.player-chip');
-    chip.classList.add('removing');
-    setTimeout(() => {
-        state.players.splice(idx, 1);
-        // Explicit removal — may empty the list, so allow an empty write.
-        saveState({ allowEmpty: true });
-        renderPlayers();
-        updateClearButtons();
-    }, 150);
+    const removeBtn = e.target.closest('.chip-remove');
+    if (removeBtn) {
+        const idx = parseInt(removeBtn.dataset.idx, 10);
+        const chip = removeBtn.closest('.player-chip');
+        chip.classList.add('removing');
+        setTimeout(() => {
+            const [removed] = state.players.splice(idx, 1);
+            // Drop the removed player's meta so the map never keeps orphans.
+            if (removed && state.playerMeta) delete state.playerMeta[removed];
+            // Explicit removal — may empty the list, so allow an empty write.
+            saveState({ allowEmpty: true });
+            renderPlayers();
+            updateClearButtons();
+        }, 150);
+        return;
+    }
+
+    const gbtn = e.target.closest('.chip-gbtn');
+    if (gbtn) {
+        const idx = parseInt(gbtn.dataset.idx, 10);
+        const name = state.players[idx];
+        state.playerMeta = PlayerMeta.setMeta(state.playerMeta, name, { gender: gbtn.dataset.gender });
+        saveState();
+        refreshChipGender(gbtn.closest('.player-chip'), name);
+        updateGenerateButton();
+        return;
+    }
+
+    // Rank dropdown: toggle the menu open, or pick an option.
+    const rankBtn = e.target.closest('.chip-rank-btn');
+    if (rankBtn) {
+        const wrap = rankBtn.closest('.chip-rank');
+        const willOpen = !wrap.classList.contains('open');
+        closeRankMenus();
+        wrap.classList.toggle('open', willOpen);
+        rankBtn.setAttribute('aria-expanded', String(willOpen));
+        return;
+    }
+
+    const rankOpt = e.target.closest('.chip-rank-opt');
+    if (rankOpt) {
+        const idx = parseInt(rankOpt.dataset.idx, 10);
+        const name = state.players[idx];
+        const rankId = rankOpt.dataset.rank || null;
+        state.playerMeta = PlayerMeta.setMeta(state.playerMeta, name, { rank: rankId });
+        saveState();
+
+        // Surgically update just this chip's dropdown — no full re-render.
+        const wrap = rankOpt.closest('.chip-rank');
+        const info = PlayerMeta.rankInfo(rankId);
+        wrap.querySelector('.chip-rank-label').textContent = info ? info.short : 'ระดับ';
+        wrap.classList.toggle('chip-rank--set', !!rankId);
+        wrap.querySelectorAll('.chip-rank-opt').forEach(o =>
+            o.classList.toggle('selected', (o.dataset.rank || '') === (rankId || '')));
+        closeRankMenus();
+    }
 });
+
+// Close any open rank dropdown(s), optionally keeping one.
+function closeRankMenus(except) {
+    document.querySelectorAll('.chip-rank.open').forEach(el => {
+        if (el === except) return;
+        el.classList.remove('open');
+        el.querySelector('.chip-rank-btn')?.setAttribute('aria-expanded', 'false');
+    });
+}
+
+// Click anywhere outside an open rank dropdown closes it.
+document.addEventListener('click', e => {
+    if (!e.target.closest('.chip-rank')) closeRankMenus();
+});
+
+// ===== Roster collapse (mobile) =====
+// On phones the name list gets long, so the title doubles as a tap-to-collapse
+// control (CSS makes it inert on desktop).  State persists in localStorage.
+const playersSection = document.getElementById('players-section');
+const rosterToggleBtn = document.getElementById('roster-collapse-btn');
+
+function setRosterCollapsed(collapsed) {
+    playersSection.classList.toggle('roster-collapsed', collapsed);
+    rosterToggleBtn.setAttribute('aria-expanded', String(!collapsed));
+    try { localStorage.setItem('bmRosterCollapsed', collapsed ? '1' : '0'); } catch { /* ignore */ }
+}
+
+rosterToggleBtn.addEventListener('click', () =>
+    setRosterCollapsed(!playersSection.classList.contains('roster-collapsed')));
+
+setRosterCollapsed(localStorage.getItem('bmRosterCollapsed') === '1');
 
 // ===== Render: Settings =====
 function renderSettings() {
@@ -355,12 +479,18 @@ function updateGenerateButton() {
     let canGenerate = participants.length >= 2;
     let message = '';
 
+    // Gender is required for every player before a schedule can be made.
+    const missingGender = PlayerMeta.playersMissingGender(state.playerMeta, state.players);
+
     if (isDoubles && state.players.length < 4) {
         canGenerate = false;
         message = 'เพิ่มผู้เล่นอย่างน้อย 4 คนสำหรับแข่งแบบคู่';
     } else if (!isDoubles && state.players.length < 2) {
         canGenerate = false;
         message = 'เพิ่มผู้เล่นอย่างน้อย 2 คน';
+    } else if (missingGender.length > 0) {
+        canGenerate = false;
+        message = `เลือกเพศให้ครบทุกคน (เหลือ ${missingGender.length} คน)`;
     }
 
     btn.disabled = !canGenerate;
@@ -1088,6 +1218,7 @@ function addPlayerByName(rawName) {
         saveState();
         renderPlayers();
         updateClearButtons();
+        setRosterCollapsed(false);   // reveal the list so the new chip is visible
     }
     recordKnownName(name);
     return true;
@@ -1114,6 +1245,7 @@ function addPlayers(rawInput) {
         saveState();
         renderPlayers();
         updateClearButtons();
+        setRosterCollapsed(false);   // reveal the list so new chips are visible
     }
     return { added, skipped };
 }
@@ -1374,6 +1506,7 @@ document.getElementById('clear-players-btn').addEventListener('click', () => {
     if (!confirm('ล้างรายชื่อผู้เล่นทั้งหมด?')) return;
     state.players = [];
     state.matches = [];
+    state.playerMeta = {};
     saveState({ allowEmpty: true });
     renderAll();
 });
@@ -1408,6 +1541,7 @@ document.getElementById('clear-all-btn').addEventListener('click', () => {
     state.matches = [];
     state.scores = {};
     state.history = {};
+    state.playerMeta = {};
     saveState({ allowEmpty: true });
     renderAll();
     switchTab('settings');

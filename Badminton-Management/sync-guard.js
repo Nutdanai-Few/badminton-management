@@ -83,6 +83,15 @@
         const hasLocalScores = !!(local.scores && Object.keys(local.scores).length);
         const hasLocalHistory = !!(local.history && Object.keys(local.history).length);
 
+        // Per-player meta (gender/rank): union the two maps so neither side's
+        // edits are lost.  When the user is actively editing locally, prefer the
+        // local value for an overlapping name; otherwise prefer the server's.
+        const localMeta = local.playerMeta || {};
+        const serverMeta = server.playerMeta || {};
+        const playerMeta = activeLocalEdit
+            ? mergeMetaMaps(localMeta, serverMeta)
+            : mergeMetaMaps(serverMeta, localMeta);
+
         return {
             players: [...serverPlayers, ...extra],
             settings: activeLocalEdit
@@ -90,8 +99,26 @@
                 : (server.settings || local.settings || { mode: 'singles', courts: 1 }),
             matches: hasLocalMatches ? local.matches : (server.matches || []),
             scores: hasLocalScores ? local.scores : (server.scores || {}),
-            history: hasLocalHistory ? local.history : (server.history || {})
+            history: hasLocalHistory ? local.history : (server.history || {}),
+            playerMeta
         };
+    }
+
+    // Union two {name: {gender, rank}} maps; for a shared name, `preferred` wins
+    // per-field but a missing field falls back to `other`.  Kept here (rather than
+    // importing player-meta.js) so sync-guard stays a single self-contained file.
+    function mergeMetaMaps(preferred, other) {
+        const a = preferred || {};
+        const b = other || {};
+        const out = {};
+        new Set([...Object.keys(a), ...Object.keys(b)]).forEach(name => {
+            const ea = a[name] || {};
+            const eb = b[name] || {};
+            const gender = ea.gender || eb.gender || null;
+            const rank = ea.rank || eb.rank || null;
+            if (gender || rank) out[name] = { gender, rank };
+        });
+        return out;
     }
 
     return { isStateEmpty, shouldPersist, localCacheWins, mergeInitialStates };

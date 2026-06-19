@@ -216,3 +216,33 @@ test('merge prefers local settings when the user is actively editing (added a pl
     const server = { players: ['A'], settings: { mode: 'singles', courts: 1 }, matches: [], scores: {}, history: {} };
     assert.deepEqual(mergeInitialStates(local, server).settings, { mode: 'doubles', courts: 3 });
 });
+
+test('merge unions playerMeta; active local edit wins per-field, fills gaps from server', () => {
+    const local = {
+        players: ['A', 'C'],                 // C is the locally-added player → active edit
+        playerMeta: { A: { gender: 'male', rank: null }, C: { gender: 'female', rank: 'pro' } },
+        settings: {}, matches: [], scores: {}, history: {}
+    };
+    const server = {
+        players: ['A'],
+        playerMeta: { A: { gender: 'female', rank: 'beginner' } },
+        settings: {}, matches: [], scores: {}, history: {}
+    };
+    const meta = mergeInitialStates(local, server).playerMeta;
+    assert.deepEqual(meta.A, { gender: 'male', rank: 'beginner' });   // local gender wins, server rank fills gap
+    assert.deepEqual(meta.C, { gender: 'female', rank: 'pro' });      // local-only player kept
+});
+
+test('merge prefers server playerMeta when not actively editing locally', () => {
+    const local = {
+        players: ['A'],
+        playerMeta: { A: { gender: 'male', rank: null } },
+        settings: {}, matches: [], scores: {}, history: {}
+    };
+    const server = {
+        players: ['A'],
+        playerMeta: { A: { gender: 'female', rank: 'pro' } },
+        settings: {}, matches: [], scores: {}, history: {}
+    };
+    assert.deepEqual(mergeInitialStates(local, server).playerMeta.A, { gender: 'female', rank: 'pro' });
+});
