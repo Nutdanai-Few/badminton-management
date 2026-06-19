@@ -457,9 +457,10 @@ test('continueSchedule: already equal -> nothing more to pair', () => {
     assert.equal(out.length, 0, 'all equal already -> stop, no new matches');
 });
 
-test('continueSchedule: keeps pairing until everyone is exactly equal', () => {
+test('continueSchedule: pairs the behind players up to the leader (court-usage first)', () => {
     // 1-4 played round 1 (count 1), 5-7 are behind (count 0).  Continue must run until
-    // all seven are level — not just "within one game".
+    // the behind players have caught up to the leader's level (1 game).  Counts may end
+    // a game apart — court usage is preferred over exact equality.
     const playedMatches = [played('1 / 2', '3 / 4', 1)];
     const remaining = ['1', '2', '3', '4', '5', '6', '7'];
     const out = continueSchedule({
@@ -467,7 +468,9 @@ test('continueSchedule: keeps pairing until everyone is exactly equal', () => {
     });
     assert.ok(out.length >= 1, 'must produce matches so the behind players catch up');
     const counts = playCounts(remaining, [...playedMatches, ...out]);
-    assert.equal(spreadOf(Object.values(counts)), 0, 'everyone ends exactly equal');
+    // The behind players (5,6,7) must have played at least once (caught up to the leader).
+    ['5', '6', '7'].forEach(p => assert.ok(counts[p] >= 1, `behind player ${p} must catch up`));
+    assert.ok(spreadOf(Object.values(counts)) <= 1, 'ends within one game');
 });
 
 test('continueSchedule: new round numbers continue after the played rounds', () => {
@@ -501,7 +504,7 @@ test('continueSchedule: no prior play -> behaves like a full fresh schedule', ()
     assert.ok(Math.min(...counts) >= 1, 'everyone plays at least once');
 });
 
-test('continueSchedule: always terminates and ends equal (no runaway)', () => {
+test('continueSchedule: always terminates (no runaway)', () => {
     const playedMatches = [played('1 / 2', '3 / 4', 1)];
     const remaining = ['1', '2', '3', '4', '5']; // 5 players, 1 court
     const out = continueSchedule({
@@ -509,7 +512,9 @@ test('continueSchedule: always terminates and ends equal (no runaway)', () => {
     });
     assert.ok(out.length < 100, 'must be bounded, not a runaway loop');
     const counts = playCounts(remaining, [...playedMatches, ...out]);
-    assert.equal(spreadOf(Object.values(counts)), 0, 'ends with everyone equal');
+    // The behind player (5) catches up to the leader; counts may differ by a game.
+    assert.ok(counts['5'] >= 1, 'the behind player gets to play');
+    assert.ok(spreadOf(Object.values(counts)) <= 1, 'ends within one game');
 });
 
 test('continueSchedule: fewer remaining players than a court needs -> no new matches', () => {
@@ -520,10 +525,10 @@ test('continueSchedule: fewer remaining players than a court needs -> no new mat
     assert.deepEqual(out, []);
 });
 
-test('continueSchedule: courts big enough to seat everyone still equalizes by opening fewer courts', () => {
-    // 8 players, 2 courts: 2 courts would seat all 8 every round, which can never even out
-    // an imbalance.  The scheduler must instead open only ONE court for the players who are
-    // behind (the four ahead rest) so everyone reaches exactly equal.
+test('continueSchedule: 8 players / 2 courts fills BOTH courts, allowing a one-game gap', () => {
+    // 8 players exactly fill 2 courts, so nobody can rest.  Court-usage-first: rather than
+    // leave a court empty to reach exact equality, BOTH courts are used — the four behind
+    // catch up while the four ahead play on, ending one game apart.
     const playedMatches = [
         played('1 / 2', '3 / 4', 1),
         played('5 / 6', '7 / 8', 1),
@@ -533,21 +538,19 @@ test('continueSchedule: courts big enough to seat everyone still equalizes by op
         const out = continueSchedule({
             players: names(8), mode: 'doubles', courts: 2, playedMatches, rand: seededRand(seed),
         });
-        assert.ok(out.length > 0, `seed ${seed}: must re-pair to equalize, not give up`);
-        // The four ahead players (1,2,5,6) must NOT be seated — they rest while 3,4,7,8 catch up.
-        const newPlayers = out.flatMap(playersOf);
-        ['1', '2', '5', '6'].forEach(p =>
-            assert.ok(!newPlayers.includes(p), `seed ${seed}: ahead player ${p} must rest, not play extra`));
+        assert.equal(out.length, 2, `seed ${seed}: one round using BOTH courts (no court left empty)`);
+        // The behind players (3,4,7,8) must catch up to the leader's level.
         const counts = playCounts(names(8), [...playedMatches, ...out]);
-        assert.equal(spreadOf(Object.values(counts)), 0, `seed ${seed}: everyone ends exactly equal`);
-        assert.equal(out.length, 1, `seed ${seed}: only one catch-up court needed`);
+        ['3', '4', '7', '8'].forEach(p =>
+            assert.equal(counts[p], 2, `seed ${seed}: behind player ${p} caught up to 2`));
+        assert.ok(spreadOf(Object.values(counts)) <= 1, `seed ${seed}: ends within one game`);
     }
 });
 
-test('continueSchedule: withdrawal leaving an 8/2 imbalance equalizes by resting the ahead players', () => {
-    // Requirement #1: a player leaving mid-game must not strand the rest unequal even when
-    // the courts could seat everyone.  9 players on 2 courts, "X" leaves with 8 remaining;
-    // 1,2,5,6 are a game ahead -> they rest one round while 3,4,7,8 catch up to equal.
+test('continueSchedule: withdrawal leaving an 8/2 imbalance fills both courts within a game', () => {
+    // A player leaving mid-game must not strand the rest with an idle court.  8 players
+    // remain on 2 courts (X withdrew); 1,2,5,6 are a game ahead.  Court-usage-first uses
+    // BOTH courts: the four behind catch up while the four ahead play on, ending a game apart.
     const playedMatches = [
         played('1 / 2', '3 / 4', 1),
         played('5 / 6', '7 / 8', 1),
@@ -557,15 +560,17 @@ test('continueSchedule: withdrawal leaving an 8/2 imbalance equalizes by resting
     const out = continueSchedule({
         players: remaining, mode: 'doubles', courts: 2, playedMatches, rand: seededRand(4),
     });
+    assert.equal(out.length, 2, 'one round using BOTH courts (no court left empty)');
     const counts = playCounts(remaining, [...playedMatches, ...out]);
-    assert.equal(spreadOf(Object.values(counts)), 0, 'remaining players end exactly equal');
-    ['1', '2', '5', '6'].forEach(p =>
-        assert.ok(!out.flatMap(playersOf).includes(p), `ahead player ${p} rests, not dragged past equal`));
+    ['3', '4', '7', '8'].forEach(p =>
+        assert.equal(counts[p], 2, `behind player ${p} caught up to 2`));
+    assert.ok(spreadOf(Object.values(counts)) <= 1, 'ends within one game');
 });
 
-test('continueSchedule: latecomer on courts that could seat everyone is caught up to exact equality', () => {
-    // Requirement #2: someone joining mid-game must be paired until everyone is equal, even
-    // when court capacity >= roster size.  8 already played a round (all at 1); "9" joins.
+test('continueSchedule: latecomer on courts that could seat everyone is caught up to the leader', () => {
+    // Someone joining mid-game must be paired until they reach the leader's level.  8 already
+    // played a round (all at 1); "9" joins.  Court usage is preferred, so counts may end a
+    // game apart rather than leaving a court idle.
     const playedMatches = [
         played('1 / 2', '3 / 4', 1),
         played('5 / 6', '7 / 8', 1),
@@ -577,14 +582,14 @@ test('continueSchedule: latecomer on courts that could seat everyone is caught u
     assert.ok(out.flatMap(playersOf).includes('9'), 'newcomer 9 must be brought into play');
     assert.ok(out.length < 200, 'stays bounded');
     const counts = playCounts(withNewcomer, [...playedMatches, ...out]);
-    assert.equal(spreadOf(Object.values(counts)), 0, 'newcomer caught up until everyone exactly equal');
+    assert.ok(counts['9'] >= 1, 'newcomer caught up to the leader (played at least once)');
+    assert.ok(spreadOf(Object.values(counts)) <= 1, 'ends within one game');
 });
 
-test('continueSchedule: fills ALL courts every round except the final equalizing round', () => {
-    // Use-all-courts rule: a court is left empty ONLY in the round that lands everyone
-    // exactly equal.  Every earlier (still-catching-up) round must open all `courts`.
-    // 9 players / 2 courts with a latecomer climbs over several rounds — all but the last
-    // must run both courts (no court sits idle while players are still behind).
+test('continueSchedule: fills ALL courts every round, never leaving one idle', () => {
+    // Court-usage rule: while catching up, every round opens all `courts` — a court is
+    // never left empty just to keep counts equal.  9 players / 2 courts with a latecomer:
+    // every round must run both courts (the 9th player rests, but no court sits idle).
     const playedMatches = [
         played('1 / 2', '3 / 4', 1),
         played('5 / 6', '7 / 8', 1),
@@ -595,21 +600,18 @@ test('continueSchedule: fills ALL courts every round except the final equalizing
         });
         const perRound = {};
         out.forEach(m => { perRound[m.round] = (perRound[m.round] || 0) + 1; });
-        const rounds = Object.keys(perRound).map(Number).sort((a, b) => a - b);
-        rounds.forEach((r, idx) => {
-            if (idx < rounds.length - 1) {
-                assert.equal(perRound[r], 2, `seed ${seed}: round ${r} (not final) must use all 2 courts`);
-            } else {
-                assert.ok(perRound[r] >= 1 && perRound[r] <= 2, `seed ${seed}: final round uses 1-2 courts`);
-            }
-        });
+        Object.entries(perRound).forEach(([r, n]) =>
+            assert.equal(n, 2, `seed ${seed}: round ${r} must use all 2 courts (none left idle)`));
         const counts = playCounts(names(9), [...playedMatches, ...out]);
-        assert.equal(spreadOf(Object.values(counts)), 0, `seed ${seed}: ends exactly equal`);
+        assert.ok(counts['9'] >= 1, `seed ${seed}: newcomer caught up`);
+        assert.ok(spreadOf(Object.values(counts)) <= 1, `seed ${seed}: ends within one game`);
     }
 });
 
-test('continueSchedule: a player who joins mid-game catches up until everyone is equal', () => {
-    // 4 players each played 2 games; player "5" arrives partway through and is added.
+test('continueSchedule: a player who joins mid-game catches up to the leader (court-usage first)', () => {
+    // 4 players each played 2 games; player "5" arrives partway through and is added.  With a
+    // single court only four can play at a time, so filling the court every round means the
+    // others play on while "5" catches up — the gap can exceed one game (court usage wins).
     const playedMatches = [
         played('1 / 2', '3 / 4', 1),
         played('1 / 3', '2 / 4', 2),
@@ -620,11 +622,13 @@ test('continueSchedule: a player who joins mid-game catches up until everyone is
     });
     assert.ok(out.flatMap(playersOf).includes('5'), 'newcomer 5 must be brought into play');
     assert.ok(out.length < 100, 'stays bounded');
+    // Every round fills the court — no match has fewer than 4 players, none is left empty.
+    out.forEach(m => assert.equal(playersOf(m).length, 4, 'every court is full'));
     const counts = playCounts(withNewcomer, [...playedMatches, ...out]);
-    assert.equal(spreadOf(Object.values(counts)), 0, 'newcomer catches up until everyone is equal');
+    assert.ok(counts['5'] >= 2, 'newcomer caught up to the leader level (2 games)');
 });
 
-test('continueSchedule: a mid-game joiner among many players ends equal, bounded', () => {
+test('continueSchedule: a mid-game joiner among many players catches up, bounded', () => {
     const playedMatches = [
         played('1 / 2', '3 / 4', 1),
         played('5 / 6', '7 / 8', 1),
@@ -636,7 +640,34 @@ test('continueSchedule: a mid-game joiner among many players ends equal, bounded
     assert.ok(out.flatMap(playersOf).includes('9'), 'newcomer 9 gets to play');
     assert.ok(out.length < 100, 'stays bounded');
     const counts = playCounts(withNewcomer, [...playedMatches, ...out]);
-    assert.equal(spreadOf(Object.values(counts)), 0, 'everyone ends equal');
+    assert.ok(counts['9'] >= 1, 'newcomer caught up to the leader');
+    assert.ok(spreadOf(Object.values(counts)) <= 1, 'ends within one game');
+});
+
+test('REGRESSION: continueSchedule never leaves a court empty just to equalize', () => {
+    // The reported issue: the old "exact equality" rule left a court idle in the final
+    // catch-up round.  Now court usage comes first — across many imbalances and seeds, no
+    // round may open fewer courts than it could fill with the available players.
+    const scenarios = [
+        // [played matches, roster, courts]
+        [[played('1 / 2', '3 / 4', 1), played('5 / 6', '7 / 8', 1), played('1 / 2', '5 / 6', 2)], names(8), 2],
+        [[played('1 / 2', '3 / 4', 1), played('5 / 6', '7 / 8', 1)], names(9), 2],
+        [[played('1 / 2', '3 / 4', 1)], ['1', '2', '3', '4', '5', '6', '7', '8'], 2],
+    ];
+    for (const [playedMatches, roster, courts] of scenarios) {
+        for (const seed of [1, 2, 3, 7, 13]) {
+            const out = continueSchedule({
+                players: roster, mode: 'doubles', courts, playedMatches, rand: seededRand(seed),
+            });
+            const perRound = {};
+            out.forEach(m => { perRound[m.round] = (perRound[m.round] || 0) + 1; });
+            // How many courts a round COULD fill given the roster size.
+            const fillable = Math.min(courts, Math.floor(roster.length / 4));
+            Object.entries(perRound).forEach(([r, n]) =>
+                assert.equal(n, fillable,
+                    `roster ${roster.length}/${courts}c seed ${seed}: round ${r} used ${n} courts, could fill ${fillable}`));
+        }
+    }
 });
 
 test('continueSchedule: singles continues until everyone is equal', () => {

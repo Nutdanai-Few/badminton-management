@@ -1146,11 +1146,11 @@ function rankForPairing(name) {
 }
 
 // Mid-game re-pairing: keep the matches already PLAYED (scored), drop the unplayed
-// ones, and keep pairing the CURRENT roster until everyone has played the same number
-// of games (the normal fairness rule).  Works whether a player LEFT (remove them first
-// — they keep only the games they played) or JOINED late (add them first — they start
-// behind and are paired until they catch up).  continueSchedule continues each player's
-// games-played (no reset), so whoever is ahead simply rests while the rest catch up.
+// ones, and keep pairing the CURRENT roster until the behind players have caught up to
+// whoever was ahead when play paused.  Court usage comes first: every round fills all
+// courts, so counts may end up to a game apart rather than leaving a court idle.  Works
+// whether a player LEFT (remove them first — they keep only the games they played) or
+// JOINED late (add them first — they are paired until they catch up).
 function continueScheduleMidGame() {
     const played = state.matches.filter(m => m.scoreA != null && m.scoreB != null);
     const newMatches = continueSchedule({
@@ -1516,7 +1516,7 @@ function handleContinueMidGame() {
         `จับคู่ต่อกลางคัน?\n\n` +
         `• เก็บ ${played.length} คู่ที่เล่นจบแล้วไว้\n` +
         `• ตัด ${unplayed} คู่ที่ยังไม่ได้เล่นทิ้ง\n` +
-        `• จับคู่ผู้เล่นปัจจุบัน (${state.players.length} คน) ต่อไปเรื่อยๆ จนทุกคนแข่งเท่ากัน`
+        `• จับคู่ผู้เล่นปัจจุบัน (${state.players.length} คน) ต่อ โดยใช้สนามครบทุกรอบจนคนที่ตามหลังไล่ทัน (จำนวนเกมอาจต่างกันได้ ±1)`
     )) return;
 
     const next = continueScheduleMidGame();

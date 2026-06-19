@@ -306,19 +306,19 @@
     // the new matches to append.  Players not in `players` (i.e. removed) are never
     // paired again — their already-played games and stats stand as-is.
     //
-    // Fairness rule: keep pairing the CURRENT roster until EVERYONE has played the same
-    // number of games, then stop.  Each player's games-played carries over (no reset), so
-    // a player who is ahead simply RESTS while the others catch up to them — nobody is
-    // dragged into extra games past the equal level.  A latecomer starts behind and is
-    // paired more often until they reach everyone else's level.
+    // Catch-up rule (court-usage first): keep pairing the CURRENT roster until the
+    // most-behind player has caught up to the games played by whoever was furthest ahead
+    // when play paused, then stop.  Each player's games-played carries over (no reset).
+    // A latecomer (or anyone who fell behind after a withdrawal) is paired until they
+    // reach the old leader's level.
     //
-    // Every round fills ALL configured courts (the fewest-played play first, so whoever is
-    // ahead rests).  A court is left empty ONLY when the roster has already become equal
-    // partway through a round — opening another court would then push someone past the
-    // equal level.  This is what lets the schedule reach EXACT equality even when the
-    // courts are big enough to seat the whole roster (e.g. 8 players / 2 courts): the final
-    // catch-up round opens just one court for the four behind players while the four ahead
-    // rest, instead of seating all eight and overshooting forever.
+    // Every round fills ALL configured courts — the most-rested play first, so when there
+    // are more players than seats whoever is ahead is the one who rests.  A court is left
+    // empty ONLY when there are literally too few players to seat four; it is NEVER left
+    // idle merely to keep play counts exactly equal.  Filling every court is preferred even
+    // if it leaves some players more than one game ahead: when the roster exactly fills the
+    // courts (e.g. 8 players / 2 courts) nobody can rest, so the only way to use every court
+    // is to let the gap sit at one game rather than leaving a court empty.
     //   players        — current roster (withdrawn players already removed / latecomers added)
     //   mode           — 'doubles' | 'singles'
     //   courts         — courts available per round
@@ -381,20 +381,20 @@
         players.forEach(p => { lastPlayed[p] = 0; });
         const selected = [];
 
-        const spread = () => {
-            const c = players.map(p => playCount[p]);
-            return Math.max(...c) - Math.min(...c);
-        };
+        // Catch-up target: the games played by whoever was furthest ahead when play paused.
+        // We pair the behind players until the most-behind one reaches this level.
+        const initialMax = Math.max(...players.map(p => playCount[p]));
+        const minPlayed = () => Math.min(...players.map(p => playCount[p]));
 
-        // Each round fills ALL configured courts with the fewest-played players first, so
-        // whoever is ahead is the one who rests until the rest catch up.  Stop the instant
-        // everyone is level (spread 0).  The only time a court is left empty is when the
-        // roster becomes equal partway through a round (see the inner loop): opening one
-        // more court would push someone past the equal level.  At least one behind player
-        // advances every round while a gap remains, so this marches toward equality and
-        // terminates.  The +1000 ceiling is only a backstop.
+        // Each round fills ALL configured courts with the most-rested players first, so when
+        // there are more players than seats whoever is ahead is the one who rests.  Stop once
+        // the most-behind player has reached the leader's level.  A court is only ever left
+        // empty when there are too few players to seat four — never to keep counts exactly
+        // equal: filling every court wins even if it leaves someone a game ahead.  At least
+        // four of the most-behind players advance every round until they catch up, so this
+        // terminates; the +1000 ceiling is only a backstop.
         for (let r = maxRound + 1; r <= maxRound + 1000; r++) {
-            if (spread() === 0) break;
+            if (minPlayed() >= initialMax) break;
 
             const sorted = shuffle(players, rand)
                 .sort((a, b) =>
@@ -405,13 +405,6 @@
             let opened = 0;
 
             for (let c = 0; c < courts; c++) {
-                // Use ALL configured courts every round — EXCEPT stop opening more courts
-                // the moment everyone has become equal partway through this round.  Seating
-                // another court would then push someone past the equal level and break it,
-                // so we leave that court empty.  This is the ONLY time a court is left idle:
-                // every round where players are still behind fills all the courts (the
-                // fewest-played play first, so whoever is ahead is the one who rests).
-                if (spread() === 0) break;
                 const available = sorted.filter(p => !usedThisRound.has(p));
                 if (available.length < seatsPerCourt) break;
                 const picked = available.slice(0, seatsPerCourt);
