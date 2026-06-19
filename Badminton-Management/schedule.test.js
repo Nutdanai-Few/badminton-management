@@ -1,7 +1,7 @@
 // Tests for the match-scheduling logic — the pairing/fairness rules.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { shuffle, roundRobin, makeSchedule, continueSchedule } = require('./schedule.js');
+const { shuffle, roundRobin, makeSchedule, continueSchedule, teamGender, forbiddenMatch } = require('./schedule.js');
 
 // A deterministic RNG so tests don't flake.  A simple LCG seeded per test.
 function seededRand(seed) {
@@ -240,6 +240,120 @@ test('doubles: prevMatches biases who waits (players who played a lot last time)
 test('doubles: fewer than 4 players yields no matches', () => {
     const matches = makeSchedule({ players: names(3), mode: 'doubles', courts: 1, rand: seededRand(1) });
     assert.deepEqual(matches, []);
+});
+
+// ===== doubles: gender pairing constraint (no ช-ช vs ญ-ญ) =====
+
+// Build a genderOf lookup from a {name: 'male'|'female'} map.
+const genderLookup = map => name => map[name] || null;
+
+// Classify a doubles team ('male'/'female'/'mixed') for assertions.
+function teamGenderOf(teamStr, gmap) {
+    const members = teamStr.split(' / ').map(s => s.trim());
+    const genders = members.map(m => gmap[m]);
+    if (genders.every(g => g === 'male')) return 'male';
+    if (genders.every(g => g === 'female')) return 'female';
+    return 'mixed';
+}
+
+// True if a whole schedule contains a forbidden all-male vs all-female match.
+function hasForbidden(matches, gmap) {
+    return matches.some(m => {
+        const a = teamGenderOf(m.teams[0], gmap);
+        const b = teamGenderOf(m.teams[1], gmap);
+        return (a === 'male' && b === 'female') || (a === 'female' && b === 'male');
+    });
+}
+
+test('teamGender: all-same vs mixed classification', () => {
+    const g = genderLookup({ a: 'male', b: 'male', c: 'female', d: null });
+    assert.equal(teamGender(['a', 'b'], g), 'male');
+    assert.equal(teamGender(['c'], g), 'female');
+    assert.equal(teamGender(['a', 'c'], g), 'mixed');
+    assert.equal(teamGender(['a', 'd'], g), 'mixed', 'unknown gender -> mixed (fail-safe)');
+});
+
+test('forbiddenMatch: only all-male vs all-female is forbidden', () => {
+    const g = genderLookup({ m1: 'male', m2: 'male', f1: 'female', f2: 'female' });
+    assert.equal(forbiddenMatch(['m1', 'm2'], ['f1', 'f2'], g), true, 'MM vs FF forbidden');
+    assert.equal(forbiddenMatch(['f1', 'f2'], ['m1', 'm2'], g), true, 'FF vs MM forbidden');
+    assert.equal(forbiddenMatch(['m1', 'f1'], ['m2', 'f2'], g), false, 'mixed vs mixed ok');
+    assert.equal(forbiddenMatch(['m1', 'f1'], ['m2', 'm2'], g), false, 'mixed vs MM ok');
+    assert.equal(forbiddenMatch(['m1', 'm2'], ['m1', 'm2'], g), false, 'MM vs MM ok');
+    assert.equal(forbiddenMatch(['f1', 'f2'], ['f1', 'f2'], g), false, 'FF vs FF ok');
+});
+
+test('doubles: never schedules an all-male vs all-female match', () => {
+    // 4 males + 4 females, 1 court — the case where MM-vs-FF is most tempting.
+    const males = ['m1', 'm2', 'm3', 'm4'];
+    const females = ['f1', 'f2', 'f3', 'f4'];
+    const players = [...males, ...females];
+    const gmap = {};
+    males.forEach(m => { gmap[m] = 'male'; });
+    females.forEach(f => { gmap[f] = 'female'; });
+    for (const seed of [1, 2, 3, 7, 13, 42, 99, 123, 256, 1000]) {
+        const matches = makeSchedule({
+            players, mode: 'doubles', courts: 1, genderOf: genderLookup(gmap), rand: seededRand(seed),
+        });
+        assert.ok(!hasForbidden(matches, gmap), `seed ${seed}: produced a forbidden ช-ช vs ญ-ญ match`);
+        // Fairness must still hold.
+        const counts = Object.values(playCounts(players, matches));
+        assert.equal(Math.min(...counts), Math.max(...counts), `seed ${seed}: play counts must stay equal`);
+    }
+});
+
+test('doubles: 2 males + 2 females on one court -> mixed vs mixed (the only legal split)', () => {
+    const players = ['m1', 'm2', 'f1', 'f2'];
+    const gmap = { m1: 'male', m2: 'male', f1: 'female', f2: 'female' };
+    for (const seed of [1, 5, 9, 21, 77]) {
+        const matches = makeSchedule({
+            players, mode: 'doubles', courts: 1, genderOf: genderLookup(gmap), rand: seededRand(seed),
+        });
+        assert.equal(matches.length, 1, 'one round of 4 -> everyone equal -> stop');
+        assert.equal(teamGenderOf(matches[0].teams[0], gmap), 'mixed');
+        assert.equal(teamGenderOf(matches[0].teams[1], gmap), 'mixed');
+    }
+});
+
+test('doubles: all-male roster still plays (all-male vs all-male is allowed)', () => {
+    const players = ['m1', 'm2', 'm3', 'm4'];
+    const gmap = { m1: 'male', m2: 'male', m3: 'male', m4: 'male' };
+    const matches = makeSchedule({
+        players, mode: 'doubles', courts: 1, genderOf: genderLookup(gmap), rand: seededRand(3),
+    });
+    assert.equal(matches.length, 1);
+    assert.ok(!hasForbidden(matches, gmap), 'all-male match is not forbidden');
+});
+
+test('doubles: with mixed genders, mixed matches DO get produced (rule is not over-applied)', () => {
+    // 3 males + 3 females, 1 court -> 6 rounds, plenty of matches: at least some must be
+    // mixed (we are not banning everything, only MM-vs-FF).
+    const players = ['m1', 'm2', 'm3', 'f1', 'f2', 'f3'];
+    const gmap = { m1: 'male', m2: 'male', m3: 'male', f1: 'female', f2: 'female', f3: 'female' };
+    const matches = makeSchedule({
+        players, mode: 'doubles', courts: 1, genderOf: genderLookup(gmap), rand: seededRand(11),
+    });
+    assert.ok(!hasForbidden(matches, gmap), 'no forbidden match');
+    const anyMixed = matches.some(m =>
+        teamGenderOf(m.teams[0], gmap) === 'mixed' || teamGenderOf(m.teams[1], gmap) === 'mixed');
+    assert.ok(anyMixed, 'mixed teams should appear, not be forbidden');
+});
+
+test('continueSchedule: mid-game re-pairing also never produces ช-ช vs ญ-ญ', () => {
+    const players = ['m1', 'm2', 'm3', 'm4', 'f1', 'f2', 'f3', 'f4'];
+    const gmap = {};
+    ['m1', 'm2', 'm3', 'm4'].forEach(m => { gmap[m] = 'male'; });
+    ['f1', 'f2', 'f3', 'f4'].forEach(f => { gmap[f] = 'female'; });
+    // One round played (all mixed), then a latecomer-free continuation on uneven counts.
+    const playedMatches = [played('m1 / f1', 'm2 / f2', 1)];
+    const remaining = players; // m3,m4,f3,f4 are behind at 0
+    for (const seed of [1, 2, 3, 7, 13, 42]) {
+        const out = continueSchedule({
+            players: remaining, mode: 'doubles', courts: 1, playedMatches,
+            genderOf: genderLookup(gmap), rand: seededRand(seed),
+        });
+        assert.ok(!hasForbidden(out, gmap), `seed ${seed}: continuation produced a forbidden match`);
+    }
 });
 
 // ===== singles =====

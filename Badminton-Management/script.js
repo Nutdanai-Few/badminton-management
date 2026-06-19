@@ -1096,8 +1096,15 @@ function generateSchedule() {
         mode: state.settings.mode,
         courts: state.settings.courts,
         prevMatches: state.matches,
-        getPlayers: getMatchPlayers
+        getPlayers: getMatchPlayers,
+        genderOf: genderForPairing
     });
+}
+
+// Gender lookup for the pairing constraint: never pair an all-male team against an
+// all-female team (ช-ช vs ญ-ญ).  Returns 'male' | 'female' | null.
+function genderForPairing(name) {
+    return PlayerMeta.getMeta(state.playerMeta, name).gender;
 }
 
 // Mid-game re-pairing: keep the matches already PLAYED (scored), drop the unplayed
@@ -1113,7 +1120,8 @@ function continueScheduleMidGame() {
         mode: state.settings.mode,
         courts: state.settings.courts,
         playedMatches: played,
-        getPlayers: getMatchPlayers
+        getPlayers: getMatchPlayers,
+        genderOf: genderForPairing
     });
     return [...played, ...newMatches];
 }

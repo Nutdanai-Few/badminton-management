@@ -74,6 +74,40 @@
         return String(match.teams[teamIdx]).split(' / ').map(s => s.trim());
     }
 
+    // ===== Gender pairing constraint =====
+    // A doubles match must never be an all-male team vs an all-female team
+    // (ช-ช vs ญ-ญ).  Mixed teams are always fine, and an all-male match or an
+    // all-female match is fine too — only the pure male-vs-female matchup is banned.
+    // `genderOf(name)` returns 'male' | 'female' | null/undefined.
+
+    // A team's gender is 'male'/'female' ONLY if every member is that gender; any
+    // unknown or mixed member makes it 'mixed'.  Treating unknowns as 'mixed' fails
+    // safe: incomplete gender data can never trigger the ban.
+    function teamGender(members, genderOf) {
+        let male = 0, female = 0;
+        for (const m of members) {
+            const g = genderOf(m);
+            if (g === 'male') male++;
+            else if (g === 'female') female++;
+        }
+        if (male === members.length) return 'male';
+        if (female === members.length) return 'female';
+        return 'mixed';
+    }
+
+    // True iff pairing teamA against teamB is the forbidden ช-ช vs ญ-ญ matchup.
+    function forbiddenMatch(teamA, teamB, genderOf) {
+        const ga = teamGender(teamA, genderOf);
+        const gb = teamGender(teamB, genderOf);
+        return (ga === 'male' && gb === 'female') || (ga === 'female' && gb === 'male');
+    }
+
+    // Penalty added to a forbidden split's cost.  Far larger than any achievable
+    // partner-repeat cost, so a legal split always wins; a forbidden split is only
+    // ever chosen when NO legal split of the four exists (which, given any group of
+    // four always has one, never happens — it just keeps the selection total).
+    const GENDER_PENALTY = 1e9;
+
     // Build a full schedule for the given participants.
     //   players      — array of participant names
     //   mode         — 'doubles' | 'singles'
@@ -81,8 +115,10 @@
     //   prevMatches  — the schedule being replaced (used only as a soft tiebreaker
     //                  so players who played a lot last time are deprioritised)
     //   getPlayers   — (match, teamIdx) => string[]; parses a match's team members
+    //   genderOf     — (name) => 'male'|'female'|null; enforces the no-(ช-ช vs ญ-ญ)
+    //                  rule in doubles (defaults to all-unknown = no constraint)
     //   rand         — injectable RNG (defaults to Math.random)
-    function makeSchedule({ players, mode, courts, prevMatches = [], getPlayers = defaultGetPlayers, rand = Math.random }) {
+    function makeSchedule({ players, mode, courts, prevMatches = [], getPlayers = defaultGetPlayers, genderOf = () => null, rand = Math.random }) {
         // Count individual appearances in the PREVIOUS schedule.  Used as the
         // lowest-priority tiebreaker so players who played more last time wait.
         const prevPlays = {};
@@ -148,7 +184,9 @@
                     // ties randomly instead of always producing the same teams.
                     let best = null, bestCost = Infinity;
                     for (const [[i, j], [k, l]] of shuffle(SPLITS, rand)) {
-                        const cost = partnered(picked[i], picked[j]) + partnered(picked[k], picked[l]);
+                        const penalty = forbiddenMatch([picked[i], picked[j]], [picked[k], picked[l]], genderOf)
+                            ? GENDER_PENALTY : 0;
+                        const cost = penalty + partnered(picked[i], picked[j]) + partnered(picked[k], picked[l]);
                         if (cost < bestCost) {
                             bestCost = cost;
                             best = [[i, j], [k, l]];
@@ -247,8 +285,9 @@
     //   courts         — courts available per round
     //   playedMatches  — the matches already played (kept by the caller)
     //   getPlayers     — (match, teamIdx) => string[]; honours the legacy triple team
+    //   genderOf       — (name) => 'male'|'female'|null; same no-(ช-ช vs ญ-ญ) rule
     //   rand           — injectable RNG
-    function continueSchedule({ players, mode, courts, playedMatches = [], getPlayers = defaultGetPlayers, rand = Math.random }) {
+    function continueSchedule({ players, mode, courts, playedMatches = [], getPlayers = defaultGetPlayers, genderOf = () => null, rand = Math.random }) {
         const seatsPerCourt = mode === 'doubles' ? 4 : 2;
 
         // Games already played by each CURRENT player (withdrawn players are ignored
@@ -266,7 +305,7 @@
         // Nobody has played yet -> there is nothing to "continue" from, so build a full
         // fresh schedule.  (Also makes this function correct when called standalone.)
         if (!players.length || Math.max(...players.map(p => playCount[p])) === 0) {
-            return makeSchedule({ players, mode, courts, prevMatches: playedMatches, getPlayers, rand });
+            return makeSchedule({ players, mode, courts, prevMatches: playedMatches, getPlayers, genderOf, rand });
         }
 
         // Too few players left to fill even one court.
@@ -338,7 +377,9 @@
                 if (mode === 'doubles') {
                     let best = null, bestCost = Infinity;
                     for (const [[i, j], [k, l]] of shuffle(SPLITS, rand)) {
-                        const cost = partnered(picked[i], picked[j]) + partnered(picked[k], picked[l]);
+                        const penalty = forbiddenMatch([picked[i], picked[j]], [picked[k], picked[l]], genderOf)
+                            ? GENDER_PENALTY : 0;
+                        const cost = penalty + partnered(picked[i], picked[j]) + partnered(picked[k], picked[l]);
                         if (cost < bestCost) { bestCost = cost; best = [[i, j], [k, l]]; }
                     }
                     const [[i, j], [k, l]] = best;
@@ -364,5 +405,5 @@
         return selected;
     }
 
-    return { shuffle, roundRobin, makeSchedule, continueSchedule };
+    return { shuffle, roundRobin, makeSchedule, continueSchedule, teamGender, forbiddenMatch };
 });
