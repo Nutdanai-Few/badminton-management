@@ -263,6 +263,20 @@ function emptyStateHTML(icon, title, hint) {
 const GENDER_SHORT = { male: 'ช', female: 'ญ' };
 const GENDER_LABEL = { male: 'ชาย', female: 'หญิง' };
 
+// Prefix a player name with a small gender dot (blue = male, pink = female).
+// The name itself stays the default colour so it's easy to read; unset gender →
+// plain name, no dot.
+function nameWithGender(name) {
+    const { gender } = PlayerMeta.getMeta(state.playerMeta, name);
+    if (!gender) return name;
+    return `<span class="gdot gdot--${gender}" title="${GENDER_LABEL[gender]}"></span>${name}`;
+}
+
+// Render a list of player names joined by " / ", each prefixed with a gender dot.
+function namesWithGender(names) {
+    return names.map(nameWithGender).join(' / ');
+}
+
 // ===== Render: Players =====
 function renderPlayers() {
     const container = document.getElementById('players-list');
@@ -536,8 +550,6 @@ function renderScoreboard() {
         return;
     }
 
-    const rankColors = ['var(--color-rank-1)', 'var(--color-rank-2)', 'var(--color-rank-3)'];
-
     const table = document.createElement('table');
     table.className = 'sb-table';
     table.innerHTML = `
@@ -554,18 +566,35 @@ function renderScoreboard() {
     `;
 
     const tbody = document.createElement('tbody');
+    const CROWN = `<svg class="sb-crown" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 8l4.5 3L12 5l4.5 6L21 8l-1.7 10.2a1 1 0 0 1-1 .8H5.7a1 1 0 0 1-1-.8L3 8z"/></svg>`;
 
     entries.forEach(([name, stats], i) => {
         const winRate = stats.played > 0
             ? Math.round(stats.wins / stats.played * 100) : 0;
-        const color = rankColors[i] || 'var(--color-text-muted)';
+        const rank = i + 1;
+        const isTop = i < 3;
+
+        // Gender-coloured avatar with the player's initial — mirrors the roster.
+        const { gender } = PlayerMeta.getMeta(state.playerMeta, name);
+        const initial = (name.trim()[0] || '?').toUpperCase();
+        const avatarClass = gender ? `sb-avatar--${gender}` : 'sb-avatar--none';
+
+        // Top 3 get a metallic medal (crown on #1); everyone else a plain dot.
+        const rankCell = isTop
+            ? `<span class="sb-medal sb-medal--${rank}">${rank === 1 ? CROWN : ''}<span class="sb-medal-num">${rank}</span></span>`
+            : `<span class="rank-dot rank-dot--plain">${rank}</span>`;
 
         const tr = document.createElement('tr');
-        tr.className = 'sb-row' + (i < 3 ? ' sb-row--top' : '');
+        tr.className = 'sb-row' + (isTop ? ` sb-row--top sb-row--rank${rank}` : '');
         tr.style.animationDelay = (i * 40) + 'ms';
         tr.innerHTML = `
-            <td class="sb-rank"><span class="rank-dot" style="background:${color}">${i + 1}</span></td>
-            <td class="sb-name">${name}</td>
+            <td class="sb-rank">${rankCell}</td>
+            <td class="sb-name">
+                <div class="sb-player">
+                    <span class="sb-avatar ${avatarClass}" aria-hidden="true">${initial}</span>
+                    <span class="sb-player-name">${name}</span>
+                </div>
+            </td>
             <td class="sb-num">${stats.played}</td>
             <td class="sb-num sb-wins">${stats.wins}</td>
             <td class="sb-num sb-losses">${stats.losses}</td>
@@ -755,7 +784,7 @@ function renderMatches() {
         if (sittingOut.length > 0) {
             headerHTML += `<div class="round-rest-group">
                 <span class="round-rest-label">พัก</span>
-                ${sittingOut.map(name => `<span class="round-rest-name">${name}</span>`).join('')}
+                ${sittingOut.map(name => `<span class="round-rest-name">${nameWithGender(name)}</span>`).join('')}
             </div>`;
         }
 
@@ -773,11 +802,12 @@ function renderMatches() {
             const winnerA = saved && match.scoreA > match.scoreB;
             const winnerB = saved && match.scoreB > match.scoreA;
 
-            // Resolve display names (for triple teams, show actual lineup)
-            let teamADisplay = match.teams[0];
-            let teamBDisplay = match.teams[1];
+            // Resolve display names (for triple teams, show actual lineup).
+            // Each name carries a ช/ญ gender badge.
+            let teamADisplay = namesWithGender(match.teams[0].split(' / '));
+            let teamBDisplay = namesWithGender(match.teams[1].split(' / '));
             if (match.tripleLineup) {
-                const lineupStr = match.tripleLineup.join(' / ');
+                const lineupStr = namesWithGender(match.tripleLineup);
                 const restHtml = `<span class="triple-rest">(${match.tripleRest} พัก)</span>`;
                 if (match.tripleTeamIdx === 0) {
                     teamADisplay = lineupStr + ' ' + restHtml;
