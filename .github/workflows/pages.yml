@@ -16,9 +16,12 @@ permissions:
   pages: write
   id-token: write
 
+# Serialize Pages deploys: queue a new run behind the current one instead of
+# cancelling it. Cancelling mid-deploy is what produced the intermittent
+# "Deployment failed, try again later." checks.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -28,7 +31,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v4
+      - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: './Badminton-Management'
