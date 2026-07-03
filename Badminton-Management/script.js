@@ -1166,24 +1166,106 @@ function continueScheduleMidGame() {
 }
 
 // ===== Tab Navigation =====
+// Tabs that live inside the "เพิ่มเติม" (more) dropdown rather than the main bar.
+const MORE_TABS = ['tournament'];
+
 function switchTab(tabName) {
-    // Update buttons
+    // Update main-bar buttons
     document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.tab === tabName);
     });
+    // Update dropdown items + reflect selection on the "more" button
+    document.querySelectorAll('.tab-more-item').forEach(item => {
+        item.classList.toggle('active', item.dataset.tab === tabName);
+    });
+    const moreBtn = document.getElementById('tab-more-btn');
+    if (moreBtn) moreBtn.classList.toggle('active', MORE_TABS.includes(tabName));
+    closeMoreMenu();
     // Update pages
     document.querySelectorAll('.page').forEach(page => {
         page.classList.toggle('active', page.id === 'page-' + tabName);
     });
+    // Re-render the tab we're switching to so it always reflects the current
+    // state instead of whatever was last painted (which could be stale, e.g.
+    // rendered while the tab was hidden). Without this the user has to reload
+    // the page to see the up-to-date content.
+    renderTab(tabName);
     // Persist
     localStorage.setItem('bmActiveTab', tabName);
 }
 
+// Re-render just the content of one tab. Kept separate from renderAll() so a
+// tab switch doesn't repaint the tabs you're leaving (which would wipe any
+// half-typed input there).
+function renderTab(tabName) {
+    switch (tabName) {
+        case 'settings':
+            renderPlayers();
+            renderSettings();
+            updateGenerateButton();
+            updateClearButtons();
+            break;
+        case 'schedule':
+            renderMatches();
+            updateTabBadge();
+            break;
+        case 'scoreboard':
+            renderScoreboard();
+            renderHistory();
+            break;
+        case 'tournament':
+            renderTournament();
+            break;
+    }
+}
+
+// "More" dropdown open/close
+function openMoreMenu() {
+    const more = document.getElementById('tab-more');
+    const menu = document.getElementById('tab-more-menu');
+    const btn = document.getElementById('tab-more-btn');
+    if (!more || !menu || !btn) return;
+    menu.hidden = false;
+    more.dataset.open = 'true';
+    btn.setAttribute('aria-expanded', 'true');
+}
+
+function closeMoreMenu() {
+    const more = document.getElementById('tab-more');
+    const menu = document.getElementById('tab-more-menu');
+    const btn = document.getElementById('tab-more-btn');
+    if (!more || !menu || !btn) return;
+    menu.hidden = true;
+    more.dataset.open = 'false';
+    btn.setAttribute('aria-expanded', 'false');
+}
+
 // Tab click handlers
 document.querySelector('.tab-bar').addEventListener('click', e => {
+    // "More" button toggles its dropdown instead of switching a tab
+    if (e.target.closest('.tab-more-btn')) {
+        const isOpen = document.getElementById('tab-more').dataset.open === 'true';
+        if (isOpen) closeMoreMenu(); else openMoreMenu();
+        return;
+    }
+    // Item selected from the dropdown
+    const item = e.target.closest('.tab-more-item');
+    if (item) {
+        switchTab(item.dataset.tab);
+        return;
+    }
+    // Regular main-bar tab
     const btn = e.target.closest('.tab-btn');
     if (!btn) return;
     switchTab(btn.dataset.tab);
+});
+
+// Close the "more" dropdown when clicking outside of it
+document.addEventListener('click', e => {
+    if (!e.target.closest('#tab-more')) closeMoreMenu();
+});
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeMoreMenu();
 });
 
 // Update tab badge
@@ -1208,6 +1290,7 @@ function renderAll() {
     updateGenerateButton();
     updateTabBadge();
     updateClearButtons();
+    renderTournament();   // keeps the tournament tab's start card in step with the roster
 }
 
 // ===== Name Suggestions (remembered roster) =====
@@ -1708,6 +1791,395 @@ document.getElementById('theme-toggle').addEventListener('click', e => {
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     if (currentThemeMode === 'system') applyTheme('system');
 });
+
+// ============================================================================
+// ===== Tournament (Swiss) — a self-contained feature =====
+// ============================================================================
+// Powered by the pure engine in tournament.js.  It is deliberately kept apart from
+// the everyday scheduler: its own Firebase ref (`badminton_tournament`) and its own
+// localStorage cache, so the main state's anti-data-loss sync guards, saveState,
+// and sync-guard.js are never touched by anything here.
+
+// Bare aliases for the tournament.js globals (assigned to window before this file).
+const Tourney = {
+    rosterStatus, createTournament, standings, standingsTable,
+    roundNumbers, latestRound, roundComplete, isComplete, champion,
+    generateNextRound, matchWinner, courtWaves, maxUsefulCourts,
+};
+
+let tourneyState = null;                 // the active tournament, or null when none
+// The mode chosen for the NEXT tournament, independent of the everyday-schedule mode on
+// the Settings tab.  null until first shown, then seeded from the current settings mode.
+let tournDraftMode = null;
+// Courts chosen for the NEXT tournament, independent of the Settings-tab court count.
+// null until first shown, then seeded from the current settings court count.
+let tournDraftCourts = null;
+const tournRef = db.ref('badminton_tournament');
+const TOURN_CACHE_KEY = 'bmTournamentCache';
+let tournServerReceived = false;         // gate: don't push until we've heard the server
+let tournUpdatedAt = null;
+let tournSaveTimer = null;
+
+function readTournCache() {
+    try { const raw = localStorage.getItem(TOURN_CACHE_KEY); return raw ? JSON.parse(raw) : null; }
+    catch { return null; }
+}
+function writeTournCache() {
+    try {
+        localStorage.setItem(TOURN_CACHE_KEY, JSON.stringify({ tournament: tourneyState, updatedAt: tournUpdatedAt }));
+    } catch { /* storage disabled/full — Firebase is the backstop */ }
+}
+
+// Mirror to cache instantly, then debounce-push to Firebase once the server is known.
+function saveTournament() {
+    tournUpdatedAt = Date.now();
+    writeTournCache();
+    if (!tournServerReceived) return;
+    clearTimeout(tournSaveTimer);
+    tournSaveTimer = setTimeout(() => {
+        tournRef.set(tourneyState ? { ...tourneyState, updatedAt: tournUpdatedAt } : null);
+    }, 300);
+}
+
+// Reconcile an incoming snapshot with our local cache (local-wins if our edit is newer),
+// mirroring the main state's guard on a much smaller scale.
+function applyTournSnapshot(data) {
+    const serverUpdatedAt = data && data.updatedAt != null ? data.updatedAt : null;
+    tournServerReceived = true;
+    if (tournUpdatedAt != null && (serverUpdatedAt == null || tournUpdatedAt > serverUpdatedAt)) {
+        // Our cache holds edits the server hasn't seen (e.g. created offline) — push up.
+        clearTimeout(tournSaveTimer);
+        tournRef.set(tourneyState ? { ...tourneyState, updatedAt: tournUpdatedAt } : null);
+        renderTournament();
+        return;
+    }
+    if (data && data.teams) {
+        const { updatedAt, ...tourn } = data;
+        tourneyState = tourn;
+        tournUpdatedAt = serverUpdatedAt;
+    } else {
+        tourneyState = null;
+        tournUpdatedAt = serverUpdatedAt;
+    }
+    writeTournCache();
+    renderTournament();
+}
+
+tournRef.on('value', snap => applyTournSnapshot(snap.val()));
+
+// ----- Rendering -----
+function renderTournament() {
+    const container = document.getElementById('tournament-container');
+    if (!container) return;
+    container.innerHTML = tourneyState ? tournamentActiveHTML(tourneyState) : tournamentStartHTML();
+}
+
+function tournamentStartHTML() {
+    // The tournament picks its own mode + court count, independent of the Settings tab.
+    if (tournDraftMode === null) tournDraftMode = state.settings.mode;
+    if (tournDraftCourts === null) tournDraftCourts = state.settings.courts || 1;
+    const mode = tournDraftMode;
+    const courts = tournDraftCourts;
+    const status = Tourney.rosterStatus(mode, state.players.length, courts);
+    const modeLabel = mode === 'doubles' ? 'คู่' : 'เดี่ยว';
+    const validCounts = status.need.slice(0, 4).join(', ');
+    const teamWord = mode === 'doubles' ? 'ทีม' : 'คน';
+    const seats = status.seatsPerCourt;
+
+    const modeToggle = `
+        <div class="setting-row">
+            <span class="setting-label">โหมด</span>
+            <div class="tourn-mode-toggle">
+                <button class="tourn-mode-btn${mode === 'singles' ? ' active' : ''}" data-tmode="singles">เดี่ยว</button>
+                <button class="tourn-mode-btn${mode === 'doubles' ? ' active' : ''}" data-tmode="doubles">คู่</button>
+            </div>
+        </div>`;
+
+    const courtStepper = `
+        <div class="setting-row">
+            <span class="setting-label">จำนวนสนาม</span>
+            <div class="stepper">
+                <button type="button" class="stepper-btn" data-tcourts="dec"${courts <= 1 ? ' disabled' : ''}>−</button>
+                <span class="stepper-value">${courts}</span>
+                <button type="button" class="stepper-btn" data-tcourts="inc">+</button>
+            </div>
+        </div>`;
+
+    // Court-aware roster hint: how many players fill the chosen courts (seats/court × courts).
+    const courtHint = `<p class="tourn-court-hint">${courts} สนาม × ${seats} คน = ต้องมีอย่างน้อย <strong>${courts * seats}</strong> คนต่อเวฟ · แนะนำ <strong>${status.recommendedPlayers}</strong> คน (โหมด${modeLabel}) เพื่อใช้สนามครบ</p>`;
+
+    let body;
+    if (status.ok) {
+        const idleWarn = status.usableCourts < courts
+            ? `<p class="tourn-court-warn">⚠ ${status.teamCount} ${teamWord} แข่งได้ ${Tourney.maxUsefulCourts(status.teamCount)} คู่/รอบ — ใช้จริงแค่ <strong>${status.usableCourts}</strong> สนาม</p>`
+            : '';
+        body = `<p class="tourn-ready">พร้อมเริ่ม · <strong>${status.teamCount} ${teamWord}</strong> · ${status.rounds} รอบ · โหมด${modeLabel} · ${status.usableCourts} สนาม</p>
+           ${idleWarn}
+           <button class="btn-generate" data-action="start">🏆 เริ่มทัวร์นาเม้น</button>`;
+    } else {
+        body = `<p class="tourn-blocked">
+              ต้องมีผู้เล่นแบบ<strong>ไม่มีเศษ</strong> (${mode === 'doubles' ? 'จำนวนทีม' : 'จำนวนคน'}เป็น 2, 4, 8, 16…)<br>
+              โหมด${modeLabel}: ต้องมี <strong>${validCounts}</strong> คน — ตอนนี้ ${state.players.length} คน
+           </p>
+           <button class="btn-generate" disabled>เพิ่ม/ลดผู้เล่นให้ลงตัวก่อน</button>`;
+    }
+
+    return `
+        <section class="card">
+            <div class="section-header"><span class="section-label">ทัวร์นาเม้น (Swiss)</span></div>
+            <p class="tourn-intro">แพ้เจอแพ้ · ชนะเจอชนะ · เล่นทุกรอบไม่มีใครตกรอบ จนได้แชมป์ · จับ${mode === 'doubles' ? 'ทีม' : 'สาย'}ให้อัตโนมัติ</p>
+            ${modeToggle}
+            ${courtStepper}
+            ${courtHint}
+            ${body}
+        </section>`;
+}
+
+function tournamentActiveHTML(t) {
+    const complete = Tourney.isComplete(t);
+    const champ = Tourney.champion(t);
+    const latest = Tourney.latestRound(t);
+    const totalR = Math.log2(t.teams.length);
+
+    let html = '';
+
+    // Champion banner
+    if (complete && champ) {
+        html += `
+            <section class="card tourn-champion-card">
+                <div class="tourn-champion">
+                    <div class="tourn-champion-trophy">🏆</div>
+                    <div>
+                        <p class="tourn-champion-label">แชมป์</p>
+                        <p class="tourn-champion-name">${namesWithGender(champ.split(' / '))}</p>
+                    </div>
+                </div>
+            </section>`;
+    }
+
+    // Standings
+    const table = Tourney.standingsTable(t);
+    html += `
+        <section class="card">
+            <div class="section-header section-header--schedule">
+                <span class="section-label">อันดับ</span>
+                <span class="section-badge">รอบ ${Math.min(latest, totalR)}/${totalR}</span>
+                <div class="section-header-right">
+                    <button class="btn-clear" data-action="reset">
+                        ${ICONS.x}<span>เริ่มทัวร์นาเม้นใหม่</span>
+                    </button>
+                </div>
+            </div>
+            <table class="tourn-standings">
+                <thead><tr><th>#</th><th>ทีม</th><th>ชนะ</th><th>แพ้</th><th>+/−</th></tr></thead>
+                <tbody>
+                    ${table.map((row, i) => {
+                        const diff = row.pointsFor - row.pointsAgainst;
+                        const isChamp = complete && champ === row.team;
+                        return `<tr class="${isChamp ? 'tourn-row--champ' : ''}">
+                            <td class="tourn-rank">${i + 1}</td>
+                            <td class="tourn-team">${namesWithGender(row.team.split(' / '))}</td>
+                            <td class="tourn-w">${row.wins}</td>
+                            <td class="tourn-l">${row.losses}</td>
+                            <td class="tourn-diff">${diff > 0 ? '+' + diff : diff}</td>
+                        </tr>`;
+                    }).join('')}
+                </tbody>
+            </table>
+        </section>`;
+
+    // Rounds — only the latest (frontier) round is editable; earlier rounds are settled.
+    html += '<section class="card">';
+    html += `<div class="section-header"><span class="section-label">ตารางการแข่งขัน</span></div>`;
+    Tourney.roundNumbers(t).forEach(r => {
+        const editable = r === latest && !complete;
+        html += tournRoundHTML(t, r, editable);
+    });
+
+    // Next-round button once the frontier round is fully decided.
+    if (!complete && Tourney.roundComplete(t, latest)) {
+        html += `<button class="btn-generate" data-action="next">▶ จับคู่รอบต่อไป</button>`;
+    } else if (!complete) {
+        html += `<p class="continue-hint">กรอกผลให้ครบทุกคู่ในรอบนี้ แล้วปุ่ม "จับคู่รอบต่อไป" จะปรากฏ</p>`;
+    }
+    html += '</section>';
+
+    return html;
+}
+
+function tournRoundHTML(t, roundNum, editable) {
+    const matches = t.matches
+        .map((m, idx) => ({ m, idx }))
+        .filter(x => x.m.round === roundNum);
+
+    // Split the round into waves of `courts` matches.  Court N (สนาม N) is the position
+    // within a wave; wave 2 starts when wave 1's courts free up.  Winner/loser matches are
+    // interleaved by the engine, so each wave mixes records and losers play from wave 1.
+    const courts = t.courts || 1;
+    const waves = Tourney.courtWaves(matches, courts);
+    const multiWave = waves.length > 1;
+
+    const rowFor = ({ m, idx }, court) => {
+        const w = Tourney.matchWinner(m);
+        const winnerA = w === 0, winnerB = w === 1;
+        const aDisp = namesWithGender(m.teams[0].split(' / '));
+        const bDisp = namesWithGender(m.teams[1].split(' / '));
+        const courtLabel = `<td class="match-num">สนาม ${court}</td>`;
+
+        if (!editable) {
+            // Settled round: read-only result.
+            return `<tr class="match-row match-row--saved">
+                ${courtLabel}
+                <td class="match-teams">
+                    <span class="team-btn${winnerA ? ' team-btn--winner' : ''}">${aDisp}</span>
+                    <span class="vs-separator">vs</span>
+                    <span class="team-btn${winnerB ? ' team-btn--winner' : ''}">${bDisp}</span>
+                </td>
+                <td class="score-cell tourn-score-ro">${m.scoreA != null ? m.scoreA : '-'}</td>
+                <td class="score-sep">–</td>
+                <td class="score-cell tourn-score-ro">${m.scoreB != null ? m.scoreB : '-'}</td>
+                <td class="save-cell"></td>
+            </tr>`;
+        }
+
+        const saved = w !== null;
+        return `<tr class="match-row${saved ? ' match-row--saved' : ''}">
+            ${courtLabel}
+            <td class="match-teams">
+                <button class="team-btn${winnerA ? ' team-btn--winner' : ''}" data-tmatch="${idx}" data-winner="A">${aDisp}</button>
+                <span class="vs-separator">vs</span>
+                <button class="team-btn${winnerB ? ' team-btn--winner' : ''}" data-tmatch="${idx}" data-winner="B">${bDisp}</button>
+            </td>
+            <td class="score-cell">
+                <input class="score-input${winnerA ? ' score-input--winner' : ''}" type="number" min="0"
+                       value="${m.scoreA != null ? m.scoreA : ''}" data-tmatch="${idx}" data-side="A" />
+            </td>
+            <td class="score-sep">–</td>
+            <td class="score-cell">
+                <input class="score-input${winnerB ? ' score-input--winner' : ''}" type="number" min="0"
+                       value="${m.scoreB != null ? m.scoreB : ''}" data-tmatch="${idx}" data-side="B" />
+            </td>
+            <td class="save-cell">
+                <button class="btn-clear-score" data-tmatch="${idx}" title="ล้างคะแนน" aria-label="ล้างคะแนน"${saved ? '' : ' hidden'}>${ICONS.reset}</button>
+                <button class="btn-save${saved ? ' btn-save--saved' : ''}" data-tmatch="${idx}">${saved ? ICONS.check : 'บันทึก'}</button>
+            </td>
+        </tr>`;
+    };
+
+    const waveBlocks = waves.map((wave, wi) => {
+        const rows = wave.map((x, ci) => rowFor(x, ci + 1)).join('');
+        const waveHdr = multiWave
+            ? `<div class="tourn-wave-header">เวฟ ${wi + 1}</div>`
+            : '';
+        return `${waveHdr}<table class="match-table"><tbody>${rows}</tbody></table>`;
+    }).join('');
+
+    return `<div class="match-round">
+        <div class="round-header"><span class="round-label">รอบที่ ${roundNum}</span></div>
+        ${waveBlocks}
+    </div>`;
+}
+
+// ----- Interaction (delegated on the tournament page only) -----
+function setTournMatchScore(idx, a, b) {
+    const m = tourneyState.matches[idx];
+    m.scoreA = a;
+    m.scoreB = b;
+    saveTournament();
+    renderTournament();
+}
+
+document.getElementById('tournament-container').addEventListener('click', e => {
+    // Mode selector on the start card (independent of the Settings-tab mode).
+    const modeBtn = e.target.closest('[data-tmode]');
+    if (modeBtn) {
+        tournDraftMode = modeBtn.dataset.tmode;
+        renderTournament();
+        return;
+    }
+
+    const courtsBtn = e.target.closest('[data-tcourts]');
+    if (courtsBtn) {
+        if (tournDraftCourts === null) tournDraftCourts = state.settings.courts || 1;
+        if (courtsBtn.dataset.tcourts === 'inc') tournDraftCourts++;
+        else if (tournDraftCourts > 1) tournDraftCourts--;
+        renderTournament();
+        return;
+    }
+
+    const startBtn = e.target.closest('[data-action="start"]');
+    if (startBtn) {
+        const mode = tournDraftMode || state.settings.mode;
+        if (!Tourney.rosterStatus(mode, state.players.length).ok) return;
+        tourneyState = Tourney.createTournament({
+            players: state.players, mode, rand: Math.random, createdAt: Date.now(),
+            courts: tournDraftCourts || state.settings.courts || 1,
+        });
+        saveTournament();
+        renderTournament();
+        return;
+    }
+
+    const nextBtn = e.target.closest('[data-action="next"]');
+    if (nextBtn) {
+        const next = Tourney.generateNextRound(tourneyState, Math.random);
+        if (next.length) {
+            tourneyState.matches.push(...next);
+            saveTournament();
+            renderTournament();
+        }
+        return;
+    }
+
+    const resetBtn = e.target.closest('[data-action="reset"]');
+    if (resetBtn) {
+        if (!confirm('เริ่มทัวร์นาเม้นใหม่? ผล/สายการแข่งปัจจุบันจะถูกล้าง')) return;
+        tourneyState = null;
+        saveTournament();
+        renderTournament();
+        return;
+    }
+
+    // Quick winner select by tapping a team name.
+    const teamBtn = e.target.closest('.team-btn[data-tmatch]');
+    if (teamBtn) {
+        const idx = parseInt(teamBtn.dataset.tmatch, 10);
+        const m = tourneyState.matches[idx];
+        const alreadyWinner = teamBtn.dataset.winner === 'A'
+            ? (Tourney.matchWinner(m) === 0)
+            : (Tourney.matchWinner(m) === 1);
+        if (alreadyWinner) {
+            setTournMatchScore(idx, null, null);
+        } else {
+            setTournMatchScore(idx, teamBtn.dataset.winner === 'A' ? 1 : 0, teamBtn.dataset.winner === 'A' ? 0 : 1);
+        }
+        return;
+    }
+
+    const clearBtn = e.target.closest('.btn-clear-score[data-tmatch]');
+    if (clearBtn) {
+        setTournMatchScore(parseInt(clearBtn.dataset.tmatch, 10), null, null);
+        return;
+    }
+
+    const saveBtn = e.target.closest('.btn-save[data-tmatch]');
+    if (saveBtn) {
+        const idx = parseInt(saveBtn.dataset.tmatch, 10);
+        const row = saveBtn.closest('tr');
+        const a = parseInt(row.querySelector('[data-side="A"]').value, 10);
+        const b = parseInt(row.querySelector('[data-side="B"]').value, 10);
+        if (!isNaN(a) && !isNaN(b)) setTournMatchScore(idx, a, b);
+        return;
+    }
+});
+
+// Hydrate the tournament from its cache instantly (before the main render runs), so a
+// reload shows it without a flash; the onValue listener then reconciles with Firebase.
+const cachedTourn = readTournCache();
+if (cachedTourn) {
+    tourneyState = cachedTourn.tournament || null;
+    tournUpdatedAt = cachedTourn.updatedAt != null ? cachedTourn.updatedAt : null;
+}
 
 // ===== Initial Load =====
 // Apply saved theme (before content renders to avoid flash)

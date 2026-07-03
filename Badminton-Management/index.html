@@ -66,6 +66,30 @@
                 </svg>
                 <span>ตารางคะแนน</span>
             </button>
+            <!-- Desktop: tournament as a normal tab -->
+            <button class="tab-btn tab-btn--desktop-only" data-tab="tournament">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M8 21h8M12 17v4M7 4h10v4a5 5 0 01-10 0V4zM17 5h2a2 2 0 01-2 3M7 5H5a2 2 0 002 3"/>
+                </svg>
+                <span>ทัวร์นาเม้น</span>
+            </button>
+            <!-- Mobile: tournament tucked behind an icon-only "more" dropdown -->
+            <div class="tab-more" id="tab-more">
+                <button class="tab-btn tab-more-btn" id="tab-more-btn" type="button"
+                        aria-haspopup="true" aria-expanded="false" aria-controls="tab-more-menu" aria-label="เพิ่มเติม">
+                    <svg class="tab-icon tab-more-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M6 9l6 6 6-6"/>
+                    </svg>
+                </button>
+                <div class="tab-more-menu" id="tab-more-menu" role="menu" hidden>
+                    <button class="tab-more-item" data-tab="tournament" type="button" role="menuitem">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M8 21h8M12 17v4M7 4h10v4a5 5 0 01-10 0V4zM17 5h2a2 2 0 01-2 3M7 5H5a2 2 0 002 3"/>
+                        </svg>
+                        <span>ทัวร์นาเม้น</span>
+                    </button>
+                </div>
+            </div>
         </nav>
     </header>
 
@@ -203,6 +227,11 @@
             </div>
         </div>
 
+        <!-- Page 4: Tournament (Swiss) -->
+        <div class="page" id="page-tournament">
+            <div class="page-inner" id="tournament-container"></div>
+        </div>
+
     </main>
 
     <!-- Sync Overlay — blocks interaction until Firebase initial sync completes -->
@@ -242,6 +271,7 @@
 
     <script src="sync-guard.js"></script>
     <script src="schedule.js"></script>
+    <script src="tournament.js"></script>
     <script src="known-names.js"></script>
     <script src="player-meta.js"></script>
     <script src="script.js"></script>
