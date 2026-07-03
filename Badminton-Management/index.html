@@ -262,6 +262,46 @@
         </div>
     </div>
 
+    <!-- Live Court Scorer — full-screen point counter for the match in play -->
+    <div class="live-scorer" id="live-scorer" hidden>
+        <div class="live-scorer-top">
+            <span class="live-scorer-round" id="live-round"></span>
+            <button class="live-close-btn" id="live-close-btn" type="button" aria-label="ปิด">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+        </div>
+
+        <div class="live-scorer-board">
+            <button class="live-side" id="live-side-A" data-side="A" type="button">
+                <span class="live-team" id="live-team-A"></span>
+                <span class="live-score" id="live-score-A">0</span>
+                <span class="live-tag" id="live-tag-A"></span>
+                <span class="live-hint">แตะเพื่อ +1</span>
+            </button>
+            <div class="live-divider"><span>–</span></div>
+            <button class="live-side" id="live-side-B" data-side="B" type="button">
+                <span class="live-team" id="live-team-B"></span>
+                <span class="live-score" id="live-score-B">0</span>
+                <span class="live-tag" id="live-tag-B"></span>
+                <span class="live-hint">แตะเพื่อ +1</span>
+            </button>
+        </div>
+
+        <div class="live-scorer-controls">
+            <button class="live-minus" id="live-minus-A" data-side="A" type="button">
+                <span class="live-minus-team" id="live-minus-team-A"></span>
+                <span class="live-minus-op">−1</span>
+            </button>
+            <button class="live-reset" id="live-reset-btn" type="button">รีเซ็ต</button>
+            <button class="live-minus" id="live-minus-B" data-side="B" type="button">
+                <span class="live-minus-team" id="live-minus-team-B"></span>
+                <span class="live-minus-op">−1</span>
+            </button>
+        </div>
+
+        <button class="live-save-btn" id="live-save-btn" type="button">บันทึกผล</button>
+    </div>
+
     <!-- Footer -->
     <footer class="app-footer">
         <div class="footer-inner">
@@ -274,6 +314,7 @@
     <script src="tournament.js"></script>
     <script src="known-names.js"></script>
     <script src="player-meta.js"></script>
+    <script src="live-score.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

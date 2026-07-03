@@ -245,7 +245,8 @@ const ICONS = {
     calendar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
     barChart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10M18 20V4M6 20v-4"/></svg>',
     clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
-    reset: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M3 13a9 9 0 1 0 3-7.7L3 8"/></svg>'
+    reset: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M3 13a9 9 0 1 0 3-7.7L3 8"/></svg>',
+    live: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 20h8M12 18v2M8 9v4M16 9v4M12 8v6"/></svg>'
 };
 
 // ===== Empty State Helper =====
@@ -841,6 +842,10 @@ function renderMatches() {
                            data-match="${match.idx}" data-side="B" />
                 </td>
                 <td class="save-cell">
+                    <button class="btn-live${(match.liveA != null || match.liveB != null) && !saved ? ' btn-live--active' : ''}"
+                            data-match="${match.idx}" title="นับแต้มสด" aria-label="นับแต้มสด">
+                        ${ICONS.live}
+                    </button>
                     <button class="btn-clear-score" data-match="${match.idx}"
                             title="ล้างคะแนน" aria-label="ล้างคะแนน"${saved ? '' : ' hidden'}>
                         ${ICONS.reset}
@@ -916,6 +921,13 @@ function updateMatchRowDOM(row, match) {
 
 // Event delegation for match save buttons and quick winner select
 document.getElementById('matches-container').addEventListener('click', e => {
+    // Live scorer: open the full-screen point counter for this match.
+    const liveBtn = e.target.closest('.btn-live');
+    if (liveBtn) {
+        openLiveScorer(parseInt(liveBtn.dataset.match, 10));
+        return;
+    }
+
     // Clear score: reset this match back to its "never scored" state, undoing
     // its contribution to the cumulative scoreboard.  Lets a mistaken result be
     // wiped without retyping.
@@ -1022,6 +1034,150 @@ document.getElementById('matches-container').addEventListener('input', e => {
     const inputB = row.querySelector('[data-side="B"]');
     const clearBtn = row.querySelector('.btn-clear-score');
     if (clearBtn) clearBtn.hidden = inputA.value === '' && inputB.value === '';
+});
+
+// ===== Live Court Scorer =====
+// A full-screen point counter for the match being played on court right now.
+// The rally-by-rally tally lives on match.liveA / match.liveB (separate from the
+// committed scoreA / scoreB) so it persists and syncs across devices without
+// touching the cumulative scoreboard until the result is committed.  Game rules
+// (21, win-by-2, deuce, 30-cap) come from the pure LiveScore module.
+let liveScorerMatchIdx = null;
+
+function liveTeamLabel(match, teamIdx) {
+    // Reuse the schedule's name+gender rendering, including triple-team lineups.
+    if (match.tripleLineup && match.tripleTeamIdx === teamIdx) {
+        return namesWithGender(match.tripleLineup);
+    }
+    return namesWithGender(match.teams[teamIdx].split(' / '));
+}
+
+// Plain team name (no gender markup) — used on the −1 buttons so it's obvious
+// which side each button subtracts from.
+function liveTeamPlain(match, teamIdx) {
+    if (match.tripleLineup && match.tripleTeamIdx === teamIdx) {
+        return match.tripleLineup.join(' / ');
+    }
+    return match.teams[teamIdx];
+}
+
+function openLiveScorer(idx) {
+    const match = state.matches[idx];
+    if (!match) return;
+    liveScorerMatchIdx = idx;
+
+    // Seed the tally: prefer an in-progress live count, else any committed score,
+    // else 0 — so you can start fresh, resume counting, or fix a saved result.
+    if (match.liveA == null && match.liveB == null) {
+        match.liveA = match.scoreA != null ? match.scoreA : 0;
+        match.liveB = match.scoreB != null ? match.scoreB : 0;
+    }
+
+    document.getElementById('live-team-A').innerHTML = liveTeamLabel(match, 0);
+    document.getElementById('live-team-B').innerHTML = liveTeamLabel(match, 1);
+    document.getElementById('live-minus-team-A').textContent = liveTeamPlain(match, 0);
+    document.getElementById('live-minus-team-B').textContent = liveTeamPlain(match, 1);
+    document.getElementById('live-round').textContent = 'รอบที่ ' + (match.round || 1);
+
+    const scorer = document.getElementById('live-scorer');
+    scorer.hidden = false;
+    document.body.classList.add('live-open');
+    renderLiveScorer();
+    saveState();   // persist the seeded tally so other devices see the count start
+}
+
+function closeLiveScorer() {
+    liveScorerMatchIdx = null;
+    document.getElementById('live-scorer').hidden = true;
+    document.body.classList.remove('live-open');
+}
+
+// Paint the open overlay from the current match state.  Called on open, on every
+// +/- , and when a remote snapshot changes the tally underneath us.
+function renderLiveScorer() {
+    if (liveScorerMatchIdx == null) return;
+    const match = state.matches[liveScorerMatchIdx];
+    if (!match) { closeLiveScorer(); return; }
+
+    const a = LiveScore.clampScore(match.liveA || 0);
+    const b = LiveScore.clampScore(match.liveB || 0);
+    const winner = LiveScore.gameWinner(a, b);
+    const gp = LiveScore.isGamePoint(a, b);
+
+    document.getElementById('live-score-A').textContent = a;
+    document.getElementById('live-score-B').textContent = b;
+
+    const sideA = document.getElementById('live-side-A');
+    const sideB = document.getElementById('live-side-B');
+    sideA.classList.toggle('live-side--winner', winner === 'A');
+    sideB.classList.toggle('live-side--winner', winner === 'B');
+    sideA.classList.toggle('live-side--gamepoint', !winner && gp.A);
+    sideB.classList.toggle('live-side--gamepoint', !winner && gp.B);
+    sideA.disabled = !LiveScore.canIncrement(a, b);
+    sideB.disabled = !LiveScore.canIncrement(a, b);
+
+    const tagA = document.getElementById('live-tag-A');
+    const tagB = document.getElementById('live-tag-B');
+    tagA.textContent = winner === 'A' ? 'ชนะ!' : (!winner && gp.A ? 'แมตช์พอยต์' : '');
+    tagB.textContent = winner === 'B' ? 'ชนะ!' : (!winner && gp.B ? 'แมตช์พอยต์' : '');
+
+    document.getElementById('live-minus-A').disabled = a <= 0;
+    document.getElementById('live-minus-B').disabled = b <= 0;
+
+    const saveBtn = document.getElementById('live-save-btn');
+    saveBtn.classList.toggle('live-save-btn--ready', winner != null);
+    saveBtn.textContent = winner ? 'บันทึกผล · จบเกม' : 'บันทึกผล';
+}
+
+// Mutate the live tally for one side, keeping it inside the game rules.
+function liveAdjust(side, delta) {
+    if (liveScorerMatchIdx == null) return;
+    const match = state.matches[liveScorerMatchIdx];
+    const a = LiveScore.clampScore(match.liveA || 0);
+    const b = LiveScore.clampScore(match.liveB || 0);
+    if (delta > 0 && !LiveScore.canIncrement(a, b)) return;   // game already decided
+    if (side === 'A') match.liveA = LiveScore.clampScore(a + delta);
+    else match.liveB = LiveScore.clampScore(b + delta);
+    renderLiveScorer();
+    saveState();
+}
+
+// Commit the tally as this match's final result (feeds the cumulative scoreboard).
+function commitLiveScore() {
+    if (liveScorerMatchIdx == null) return;
+    const idx = liveScorerMatchIdx;
+    const match = state.matches[idx];
+    const a = LiveScore.clampScore(match.liveA || 0);
+    const b = LiveScore.clampScore(match.liveB || 0);
+
+    updateScoresForMatch(match, match.scoreA, match.scoreB, a, b);
+    match.scoreA = a;
+    match.scoreB = b;
+    match.liveA = null;   // tally consumed
+    match.liveB = null;
+    saveState();
+
+    closeLiveScorer();
+    renderMatches();
+    renderScoreboard();
+    saveHistorySnapshot();
+    updateClearButtons();
+}
+
+// Wire the overlay controls.
+document.getElementById('live-side-A').addEventListener('click', () => liveAdjust('A', +1));
+document.getElementById('live-side-B').addEventListener('click', () => liveAdjust('B', +1));
+document.getElementById('live-minus-A').addEventListener('click', () => liveAdjust('A', -1));
+document.getElementById('live-minus-B').addEventListener('click', () => liveAdjust('B', -1));
+document.getElementById('live-close-btn').addEventListener('click', closeLiveScorer);
+document.getElementById('live-save-btn').addEventListener('click', commitLiveScore);
+document.getElementById('live-reset-btn').addEventListener('click', () => {
+    if (liveScorerMatchIdx == null) return;
+    const match = state.matches[liveScorerMatchIdx];
+    match.liveA = 0;
+    match.liveB = 0;
+    renderLiveScorer();
+    saveState();
 });
 
 // ===== Participants Helper =====
@@ -1291,6 +1447,7 @@ function renderAll() {
     updateTabBadge();
     updateClearButtons();
     renderTournament();   // keeps the tournament tab's start card in step with the roster
+    renderLiveScorer();   // keep an open live scorer in sync with remote snapshots
 }
 
 // ===== Name Suggestions (remembered roster) =====
