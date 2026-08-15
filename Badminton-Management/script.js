@@ -2364,3 +2364,285 @@ if (cachedState) {
 // Restore saved tab (UI-only preference, stays in localStorage)
 const savedTab = localStorage.getItem('bmActiveTab');
 if (savedTab) switchTab(savedTab);
+
+// ============================================================================
+// ===== PWA: install to home screen + pull to refresh =====
+// ============================================================================
+// All the *decisions* (may we offer an install? is the banner snoozed? how far
+// has the finger pulled?) live in pwa.js so they can be unit-tested.  Everything
+// below is just DOM, events and localStorage.
+// See documents/pwa-install-and-pull-to-refresh.md
+
+// ----- Service worker -------------------------------------------------------
+// Required for installability, and gives the app shell an offline fallback.
+// Firebase traffic is never cached (see sw.js).  Opening index.html straight from
+// disk (file://) has no service worker at all — guard so nothing throws there.
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(() => { /* offline / unsupported */ });
+    });
+}
+
+// ----- Install banner + install icon ----------------------------------------
+
+const installBanner = document.getElementById('install-banner');
+const installBannerSub = document.getElementById('install-banner-sub');
+const installAcceptBtn = document.getElementById('install-accept-btn');
+const installDismissBtn = document.getElementById('install-dismiss-btn');
+const installIconBtn = document.getElementById('install-icon-btn');
+const installIOSSteps = document.getElementById('install-ios-steps');
+
+let deferredInstallPrompt = null;   // the captured beforeinstallprompt event
+let installOfferSeen = false;       // the browser said "installable" at least once
+let appInstalled = false;           // appinstalled fired this session
+let installBannerVisible = false;
+let installBannerHideTimer = null;
+
+function readInstallDismissedAt() {
+    try {
+        const raw = localStorage.getItem(PWA.DISMISS_KEY);
+        return raw ? Number(raw) : null;
+    } catch { return null; }
+}
+
+function writeInstallDismissedAt(ts) {
+    try { localStorage.setItem(PWA.DISMISS_KEY, String(ts)); } catch { /* ignore */ }
+}
+
+function clearInstallDismissed() {
+    try { localStorage.removeItem(PWA.DISMISS_KEY); } catch { /* ignore */ }
+}
+
+function isAppStandalone() {
+    let displayModeStandalone = false;
+    try {
+        displayModeStandalone = window.matchMedia('(display-mode: standalone)').matches
+            || window.matchMedia('(display-mode: minimal-ui)').matches
+            || window.matchMedia('(display-mode: fullscreen)').matches;
+    } catch { /* older browsers */ }
+    return PWA.isStandaloneDisplay({
+        displayModeStandalone,
+        navigatorStandalone: window.navigator.standalone === true,
+    });
+}
+
+function installAvailability() {
+    return PWA.installAvailability({
+        // Keep offering after the prompt object is consumed: Chrome only hands it
+        // over once per page, but the app is still installable from its menu.
+        hasPrompt: Boolean(deferredInstallPrompt) || installOfferSeen,
+        standalone: isAppStandalone(),
+        iosSafari: PWA.isIOSSafari(navigator.userAgent, navigator.maxTouchPoints),
+        installed: appInstalled,
+    });
+}
+
+function showInstallBanner() {
+    if (installBannerHideTimer) { clearTimeout(installBannerHideTimer); installBannerHideTimer = null; }
+    installBanner.hidden = false;
+    document.body.classList.add('install-banner-open');
+    // Next frame, so the slide-up transition actually runs.
+    requestAnimationFrame(() => installBanner.classList.add('open'));
+    installBannerVisible = true;
+}
+
+function hideInstallBanner() {
+    installBanner.classList.remove('open');
+    document.body.classList.remove('install-banner-open');
+    installBannerVisible = false;
+    if (installBannerHideTimer) clearTimeout(installBannerHideTimer);
+    installBannerHideTimer = setTimeout(() => { installBanner.hidden = true; }, 350);
+}
+
+// Single source of truth for both surfaces: banner when it is due, icon otherwise.
+// Dismissing the banner therefore *always* leaves the icon behind.
+function refreshInstallUI() {
+    const availability = installAvailability();
+    const wantBanner = PWA.shouldShowBanner({
+        availability,
+        dismissedAt: readInstallDismissedAt(),
+        now: Date.now(),
+    });
+
+    if (availability === 'ios') {
+        installAcceptBtn.textContent = installIOSSteps.hidden ? 'วิธีติดตั้ง' : 'ซ่อนวิธี';
+        installBannerSub.textContent = 'เพิ่มไปยังหน้าจอโฮมของ iPhone/iPad';
+    } else if (deferredInstallPrompt) {
+        installAcceptBtn.textContent = 'ติดตั้ง';
+        installAcceptBtn.hidden = false;
+        installBannerSub.textContent = 'เพิ่มไปยังหน้าจอหลัก เปิดใช้ได้เร็วเหมือนแอปจริง';
+    }
+
+    if (wantBanner && !installBannerVisible) showInstallBanner();
+    else if (!wantBanner && installBannerVisible) hideInstallBanner();
+
+    installIconBtn.hidden = !PWA.shouldShowIcon({
+        availability,
+        bannerVisible: wantBanner,
+    });
+}
+
+// Chrome/Edge: stash the event so we can fire the real prompt from our own button.
+window.addEventListener('beforeinstallprompt', e => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    installOfferSeen = true;
+    refreshInstallUI();
+});
+
+window.addEventListener('appinstalled', () => {
+    appInstalled = true;
+    deferredInstallPrompt = null;
+    clearInstallDismissed();
+    refreshInstallUI();
+});
+
+// Launched from the home screen mid-session (or the OS changed display mode).
+try {
+    window.matchMedia('(display-mode: standalone)')
+        .addEventListener('change', () => refreshInstallUI());
+} catch { /* older browsers */ }
+
+async function triggerInstall() {
+    if (deferredInstallPrompt) {
+        const promptEvent = deferredInstallPrompt;
+        deferredInstallPrompt = null;          // a prompt event may only be used once
+        try {
+            promptEvent.prompt();
+            const choice = await promptEvent.userChoice;
+            if (!choice || choice.outcome !== 'accepted') {
+                // Said no — snooze the banner but keep the icon around.
+                writeInstallDismissedAt(Date.now());
+            }
+        } catch { /* prompt already consumed */ }
+        hideInstallBanner();
+        refreshInstallUI();
+        return;
+    }
+
+    // iOS, or the prompt was already spent: show the manual steps instead.
+    if (installAvailability() === 'ios') {
+        installIOSSteps.hidden = !installIOSSteps.hidden;
+        installAcceptBtn.textContent = installIOSSteps.hidden ? 'วิธีติดตั้ง' : 'ซ่อนวิธี';
+    } else {
+        installBannerSub.textContent = 'เปิดเมนูของเบราว์เซอร์ แล้วเลือก "ติดตั้งแอป"';
+        installAcceptBtn.hidden = true;
+    }
+}
+
+installAcceptBtn.addEventListener('click', triggerInstall);
+
+// Dismiss = hide the banner and stay quiet for PWA.SNOOZE_MS.  The header icon
+// takes over immediately so installing is still one tap away.
+installDismissBtn.addEventListener('click', () => {
+    writeInstallDismissedAt(Date.now());
+    hideInstallBanner();
+    installIOSSteps.hidden = true;
+    installAcceptBtn.hidden = false;
+    refreshInstallUI();
+});
+
+installIconBtn.addEventListener('click', () => {
+    if (deferredInstallPrompt) {
+        triggerInstall();
+        return;
+    }
+    // No live prompt (iOS, or already used): re-open the banner with instructions.
+    clearInstallDismissed();
+    installAcceptBtn.hidden = false;
+    if (installAvailability() === 'ios') installIOSSteps.hidden = false;
+    refreshInstallUI();
+});
+
+// iOS never fires beforeinstallprompt, so decide on load.
+refreshInstallUI();
+
+// ----- Pull to refresh ------------------------------------------------------
+
+const ptrIndicator = document.getElementById('ptr-indicator');
+const pullTracker = PWA.createPullTracker();
+const PTR_REST_OFFSET = 46;    // px the indicator sits above the viewport at rest
+let ptrRefreshing = false;
+
+// Pull-to-refresh must never fight a full-screen mode or a modal.
+function pullToRefreshEnabled() {
+    if (ptrRefreshing) return false;
+    if (document.body.classList.contains('live-open')) return false;
+    const qr = document.getElementById('qr-overlay');
+    if (qr && qr.classList.contains('open')) return false;
+    const sync = document.getElementById('sync-overlay');
+    if (sync && sync.classList.contains('open')) return false;
+    return true;
+}
+
+// The document is the only real scroller, but a table or menu under the finger
+// may have its own scroll — do not steal the gesture from it.
+function isAtScrollTop(target) {
+    if ((window.scrollY || document.documentElement.scrollTop || 0) > 0) return false;
+    let el = target;
+    while (el && el.nodeType === 1 && el !== document.body) {
+        if (el.scrollTop > 0) return false;
+        el = el.parentElement;
+    }
+    return true;
+}
+
+function drawPull(distance, ready) {
+    ptrIndicator.classList.remove('ptr-indicator--animating');
+    ptrIndicator.style.transform = 'translateY(' + (distance - PTR_REST_OFFSET) + 'px)';
+    ptrIndicator.style.opacity = String(Math.min(1, distance / 30));
+    ptrIndicator.classList.toggle('ptr-indicator--ready', Boolean(ready));
+}
+
+function resetPull() {
+    ptrIndicator.classList.add('ptr-indicator--animating');
+    ptrIndicator.classList.remove('ptr-indicator--ready', 'ptr-indicator--refreshing');
+    ptrIndicator.style.transform = '';
+    ptrIndicator.style.opacity = '';
+}
+
+function runRefresh() {
+    ptrRefreshing = true;
+    ptrIndicator.classList.add('ptr-indicator--animating', 'ptr-indicator--refreshing');
+    ptrIndicator.classList.remove('ptr-indicator--ready');
+    ptrIndicator.style.transform = 'translateY(24px)';
+    ptrIndicator.style.opacity = '1';
+    // Let the spinner render for a beat so the gesture feels acknowledged.
+    setTimeout(() => location.reload(), 320);
+}
+
+document.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) { pullTracker.cancel(); return; }
+    pullTracker.start(e.touches[0].clientY, {
+        atTop: isAtScrollTop(e.target),
+        enabled: pullToRefreshEnabled(),
+    });
+}, { passive: true });
+
+document.addEventListener('touchmove', e => {
+    if (e.touches.length !== 1) {
+        if (pullTracker.active) resetPull();
+        pullTracker.cancel();
+        return;
+    }
+    const wasActive = pullTracker.active;
+    const pull = pullTracker.move(e.touches[0].clientY);
+    if (pull.active) {
+        // Suppress the native overscroll so only our indicator moves.
+        if (e.cancelable) e.preventDefault();
+        drawPull(pull.distance, pull.ready);
+    } else if (wasActive) {
+        resetPull();
+    }
+}, { passive: false });
+
+document.addEventListener('touchend', () => {
+    if (!pullTracker.active) { pullTracker.cancel(); return; }
+    if (pullTracker.end().refresh) runRefresh();
+    else resetPull();
+}, { passive: true });
+
+document.addEventListener('touchcancel', () => {
+    if (pullTracker.active) resetPull();
+    pullTracker.cancel();
+}, { passive: true });
