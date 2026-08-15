@@ -2563,6 +2563,7 @@ const ptrIndicator = document.getElementById('ptr-indicator');
 const pullTracker = PWA.createPullTracker();
 const PTR_REST_OFFSET = 46;    // px the indicator sits above the viewport at rest
 let ptrRefreshing = false;
+let ptrHideTimer = null;
 
 // Pull-to-refresh must never fight a full-screen mode or a modal.
 function pullToRefreshEnabled() {
@@ -2588,6 +2589,8 @@ function isAtScrollTop(target) {
 }
 
 function drawPull(distance, ready) {
+    if (ptrHideTimer) { clearTimeout(ptrHideTimer); ptrHideTimer = null; }
+    ptrIndicator.hidden = false;   // only ever visible while a pull is happening
     ptrIndicator.classList.remove('ptr-indicator--animating');
     ptrIndicator.style.transform = 'translateY(' + (distance - PTR_REST_OFFSET) + 'px)';
     ptrIndicator.style.opacity = String(Math.min(1, distance / 30));
@@ -2599,10 +2602,15 @@ function resetPull() {
     ptrIndicator.classList.remove('ptr-indicator--ready', 'ptr-indicator--refreshing');
     ptrIndicator.style.transform = '';
     ptrIndicator.style.opacity = '';
+    // Stay in the DOM long enough to spring back, then hide again.
+    if (ptrHideTimer) clearTimeout(ptrHideTimer);
+    ptrHideTimer = setTimeout(() => { ptrIndicator.hidden = true; }, 320);
 }
 
 function runRefresh() {
     ptrRefreshing = true;
+    if (ptrHideTimer) { clearTimeout(ptrHideTimer); ptrHideTimer = null; }
+    ptrIndicator.hidden = false;
     ptrIndicator.classList.add('ptr-indicator--animating', 'ptr-indicator--refreshing');
     ptrIndicator.classList.remove('ptr-indicator--ready');
     ptrIndicator.style.transform = 'translateY(24px)';

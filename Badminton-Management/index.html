@@ -20,12 +20,20 @@
     <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
     <script src="https://www.gstatic.com/firebasejs/11.4.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/11.4.0/firebase-database-compat.js"></script>
-    <link rel="stylesheet" href="style.css" />
+    <!-- Local assets carry ?v=<ASSET_VERSION>.  GitHub Pages serves everything with
+         max-age=600 and no filename hashing, so without this a browser happily pairs
+         freshly-revalidated HTML with a stale style.css/script.js from its own cache.
+         Bump the token in EVERY local src/href below (and in sw.js SHELL) on any
+         deploy that changes these files — asset-version.test.js enforces that. -->
+    <link rel="stylesheet" href="style.css?v=20260815b" />
 </head>
 <body>
-    <!-- Pull-to-refresh indicator — follows the finger, spins while reloading -->
-    <div class="ptr-indicator" id="ptr-indicator" aria-hidden="true">
-        <svg class="ptr-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Pull-to-refresh indicator — follows the finger, spins while reloading.
+         Starts `hidden` and is only revealed by script.js during an actual pull, so a
+         browser running this markup against a stale style.css cannot paint a huge
+         unstyled arrow in the page flow.  The svg is sized inline for the same reason. -->
+    <div class="ptr-indicator" id="ptr-indicator" aria-hidden="true" hidden>
+        <svg class="ptr-arrow" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 5v14M5 12l7 7 7-7"/>
         </svg>
     </div>
@@ -364,13 +372,13 @@
         </div>
     </footer>
 
-    <script src="sync-guard.js"></script>
-    <script src="schedule.js"></script>
-    <script src="tournament.js"></script>
-    <script src="known-names.js"></script>
-    <script src="player-meta.js"></script>
-    <script src="live-score.js"></script>
-    <script src="pwa.js"></script>
-    <script src="script.js"></script>
+    <script src="sync-guard.js?v=20260815b"></script>
+    <script src="schedule.js?v=20260815b"></script>
+    <script src="tournament.js?v=20260815b"></script>
+    <script src="known-names.js?v=20260815b"></script>
+    <script src="player-meta.js?v=20260815b"></script>
+    <script src="live-score.js?v=20260815b"></script>
+    <script src="pwa.js?v=20260815b"></script>
+    <script src="script.js?v=20260815b"></script>
 </body>
 </html>
