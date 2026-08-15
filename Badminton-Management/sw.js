@@ -10,23 +10,25 @@
 // straight through, untouched.  Same-origin files are network-first (so a deploy
 // lands on the very next load) with the cache purely as an offline fallback.
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL_CACHE = `bm-shell-${VERSION}`;
 const CDN_CACHE = `bm-cdn-${VERSION}`;
 
-// The app shell — everything needed to boot with no network.
+// The app shell — everything needed to boot with no network.  The ?v= tokens must
+// match index.html exactly (asset-version.test.js checks this), otherwise the page
+// would request URLs this worker never precached.
 const SHELL = [
     './',
     './index.html',
-    './style.css',
-    './sync-guard.js',
-    './schedule.js',
-    './tournament.js',
-    './known-names.js',
-    './player-meta.js',
-    './live-score.js',
-    './pwa.js',
-    './script.js',
+    './style.css?v=20260815b',
+    './sync-guard.js?v=20260815b',
+    './schedule.js?v=20260815b',
+    './tournament.js?v=20260815b',
+    './known-names.js?v=20260815b',
+    './player-meta.js?v=20260815b',
+    './live-score.js?v=20260815b',
+    './pwa.js?v=20260815b',
+    './script.js?v=20260815b',
     './manifest.webmanifest',
     './icons/icon-192.png',
     './icons/icon-512.png',
@@ -69,7 +71,12 @@ self.addEventListener('message', event => {
 async function networkFirst(request) {
     const cache = await caches.open(SHELL_CACHE);
     try {
-        const fresh = await fetch(request);
+        // 'no-cache' forces a revalidation with the server instead of letting the
+        // browser's own HTTP cache answer.  GitHub Pages serves these files with
+        // max-age=600 and no filename hashing, so a plain fetch() here could hand
+        // back a stale script/stylesheet for up to 10 minutes after a deploy.
+        const fresh = await fetch(new Request(request, { cache: 'no-cache' }))
+            .catch(() => fetch(request));    // some browsers reject the option
         if (fresh && fresh.ok) cache.put(request, fresh.clone());
         return fresh;
     } catch (err) {

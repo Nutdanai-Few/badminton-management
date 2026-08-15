@@ -2903,16 +2903,18 @@ body.live-open .install-banner { display: none; }
 
 /* iOS instructions (no beforeinstallprompt there — users must do it by hand) */
 .install-ios-steps {
-  margin: 0;
-  padding: 0 16px 16px 34px;
+  margin: 0 16px 14px;
+  padding: 12px 0 0 22px;
   border-top: 1px solid var(--color-border);
-  padding-top: 12px;
   font-size: 13px;
   color: var(--color-text-secondary);
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  /* Keep it a real ordered list — display:flex would drop the 1/2/3 markers. */
+  list-style: decimal;
 }
+
+.install-ios-steps li { margin-bottom: 5px; }
+.install-ios-steps li:last-child { margin-bottom: 0; }
+.install-ios-steps li::marker { color: var(--color-accent); font-weight: 700; }
 
 .install-ios-steps[hidden] { display: none; }
 .install-ios-steps strong { color: var(--color-text-primary); font-weight: 600; }
@@ -2935,6 +2937,9 @@ body.live-open .install-banner { display: none; }
 }
 
 /* ----- Pull to refresh ----- */
+/* `display: grid` below would otherwise beat the UA's [hidden] rule. */
+.ptr-indicator[hidden] { display: none; }
+
 .ptr-indicator {
   position: fixed;
   top: 0;

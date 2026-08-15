@@ -76,6 +76,22 @@ These are the non-obvious rules the pairing engine enforces. Corresponding desig
 - **Odd rosters get a "triple team"** (`getTripleCombos` / `getParticipantsFromList`): when a doubles roster has an odd count, one 3-person team is formed; only 2 of its 3 members play any given match, tracked via `match.tripleLineup` / `match.tripleTeamIdx`.
 - **Mid-game re-pairing** (`continueSchedule`): when a player leaves or a latecomer joins mid-session, already-played (scored) matches are kept and only new matches are appended. Withdrawn players are never paired again; their stats stand. Catch-up rule fills all courts, letting the most-rested play first until the most-behind player reaches the level of whoever was furthest ahead when play paused.
 
+### Deploy + cache busting (don't skip this)
+
+The site is deployed to GitHub Pages from **`main`** by `.github/workflows/pages.yml` (day-to-day work
+lands on `master`; merging `master` → `main` releases). Pages serves every file with
+`cache-control: max-age=600` and no filename hashing, so a browser will happily pair a fresh
+`index.html` with a **stale `style.css`/`script.js` from its own HTTP cache** — that shipped once as a
+giant unstyled pull-to-refresh arrow and a missing install button on iOS.
+
+Therefore: every local `.js`/`.css` URL in `index.html` carries a shared `?v=<token>`, and `sw.js`'s
+`SHELL` list must use the *same* URLs. **Bump the token in both files (and `VERSION` in `sw.js`) on any
+deploy that changes those assets.** `asset-version.test.js` fails if a token is missing, tokens drift
+apart, or the worker precaches URLs the page never requests.
+
+Related fail-safe: UI that CSS positions off-screen (`#ptr-indicator`, `#install-banner`) starts with the
+`hidden` attribute and is revealed by `script.js`, so stale/absent CSS can never dump it into the page flow.
+
 ## Conventions
 
 - A player's **name is their immutable id** — scores, matches, history, and meta are all keyed by name. Renaming is not a supported operation.
